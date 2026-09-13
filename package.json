@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check:network": "tsx scripts/check-network.ts"
+    "check:network": "tsx scripts/check-network.ts",
+    "test:live-studionet": "tsx scripts/live-studionet-smoke.ts"
   },
   "dependencies": {
     "framer-motion": "11.15.0",

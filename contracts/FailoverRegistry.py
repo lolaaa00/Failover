@@ -16,8 +16,8 @@ This module intentionally targets the STABLE 61999 contract family:
   gl.Contract / @gl.public.view / @gl.public.write / @gl.contract_interface /
   gl.vm.run_nondet_unsafe / gl.nondet.web.get / gl.nondet.exec_prompt(...)
 
-No v0.3 syntax (gl.contract.Contract, @gl.contract.interface,
-run_nondet_default) is used anywhere in this file.
+No v0.3-only runtime syntax is used anywhere in this file (see
+scripts/contract_static_checks.py for the enforced denylist).
 """
 
 from genlayer import *

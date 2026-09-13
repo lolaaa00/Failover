@@ -1,0 +1,77 @@
+name: Failover CI
+
+on:
+  push:
+    paths:
+      - "failover/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "failover/**"
+  workflow_dispatch: {}
+
+defaults:
+  run:
+    working-directory: failover
+
+jobs:
+  contract-checks:
+    name: Contract compile + static checks + python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: pip install pytest
+      - name: Python compile check (both contracts)
+        run: python3 -m py_compile contracts/FailoverRegistry.py contracts/FailoverGate.py
+      - name: Contract static preflight
+        run: python3 scripts/contract_static_checks.py
+      - name: Pure-function + protocol contract tests
+        run: python3 -m pytest tests/contract -q -p no:gltest
+
+  frontend-checks:
+    name: Install, lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: npm ci
+      - name: Network configuration preflight (chain 61999 / studio.genlayer.com)
+        run: npm run check:network
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Production build
+        run: npm run build
+
+  # Opt-in only: exercises a real Studionet deployment/write path with a
+  # funded signer. Never run automatically, never embeds a private key in
+  # the repo -- the signer is supplied at run time via a GitHub encrypted
+  # secret and only ever lives in the runner's environment.
+  live-studionet-smoke:
+    name: "[opt-in] Live Studionet smoke test"
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - name: Live smoke test against Studionet
+        env:
+          FAILOVER_LIVE_SIGNER_KEY: ${{ secrets.FAILOVER_LIVE_SIGNER_KEY }}
+        run: |
+          if [ -z "$FAILOVER_LIVE_SIGNER_KEY" ]; then
+            echo "No funded signer secret configured; skipping live smoke test." && exit 0
+          fi
+          npm run test:live-studionet
