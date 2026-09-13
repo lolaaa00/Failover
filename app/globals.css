@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+@theme {
+  --color-panel-black: #0b0e11;
+  --color-panel-raised: #12161a;
+  --color-cockpit-white: #e8ece8;
+  --color-safe-green: #46c878;
+  --color-caution-amber: #f1b43a;
+  --color-emergency-red: #e5484d;
+  --color-avionics-blue: #4a6dff;
+
+  --font-display: "Inter Tight", "Inter", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --font-condensed: "Archivo Narrow", "Inter Tight", sans-serif;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--color-panel-black);
+  color: var(--color-cockpit-white);
+  font-family: var(--font-display);
+}
+
+.font-mono-label {
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+}
+
+.font-condensed {
+  font-family: var(--font-condensed);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-avionics-blue);
+  outline-offset: 2px;
+}
+
+/* Interlock guarded-switch motif used across status annunciators */
+.interlock-rail {
+  background-image: repeating-linear-gradient(
+    90deg,
+    rgba(232, 236, 232, 0.14) 0px,
+    rgba(232, 236, 232, 0.14) 1px,
+    transparent 1px,
+    transparent 10px
+  );
+}
+
+.checksum-plate {
+  background-color: var(--color-panel-raised);
+  border: 1px solid rgba(232, 236, 232, 0.12);
+}
