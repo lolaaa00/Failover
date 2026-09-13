@@ -71,8 +71,8 @@ export default function GateDemoPage({ params }: { params: Promise<{ id: string 
       {!liveDeployed && (
         <div className="checksum-plate p-4 border-caution-amber/50 space-y-3">
           <p className="font-mono-label text-xs uppercase text-caution-amber">
-            No live FailoverGate deployment configured — set the linked project's demo stage to
-            drive the gate's behavior.
+            No live FailoverGate deployment configured — set the linked project&rsquo;s demo stage
+            to drive the gate&rsquo;s behavior.
           </p>
           <div className="flex flex-wrap gap-2 font-mono-label text-[11px] uppercase">
             {(["SAFE", "RESTRICTED", "RECOVERY_PENDING", "RECOVERED_TO_SAFE"] as DemoStage[]).map((s) => (

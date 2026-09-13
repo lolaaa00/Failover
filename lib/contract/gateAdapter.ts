@@ -42,7 +42,8 @@ export async function submitExecuteHighRisk(
 ): Promise<string> {
   const address = requireDeployed();
   const client = createWriteClient(walletAddress, provider);
-  const tx = await client.writeContract({ address, functionName: "execute_high_risk", args: [actionHash] });
+  const tx = await client.writeContract({ address, functionName: "execute_high_risk", value: 0n,
+    args: [actionHash] });
   return tx as unknown as string;
 }
 
@@ -53,6 +54,7 @@ export async function submitExecuteLowRisk(
 ): Promise<string> {
   const address = requireDeployed();
   const client = createWriteClient(walletAddress, provider);
-  const tx = await client.writeContract({ address, functionName: "execute_low_risk", args: [actionHash] });
+  const tx = await client.writeContract({ address, functionName: "execute_low_risk", value: 0n,
+    args: [actionHash] });
   return tx as unknown as string;
 }

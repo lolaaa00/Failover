@@ -94,6 +94,7 @@ export async function submitRegisterProject(
   const tx = await client.writeContract({
     address,
     functionName: "register_project",
+    value: 0n,
     args: [
       args.projectId,
       args.name,
@@ -119,6 +120,7 @@ export async function submitActivateProject(
   const tx = await client.writeContract({
     address,
     functionName: "activate_project",
+    value: 0n,
     args: [projectId],
   });
   return tx as unknown as string;
@@ -134,6 +136,7 @@ export async function submitRunSafetyCheck(
   const tx = await client.writeContract({
     address,
     functionName: "run_safety_check",
+    value: 0n,
     args: [projectId],
   });
   return tx as unknown as string;
@@ -152,6 +155,7 @@ export async function submitRecovery(
   const tx = await client.writeContract({
     address,
     functionName: "submit_recovery",
+    value: 0n,
     args: [projectId, newReleaseUrl, newFrontendUrl, recoveryDescription],
   });
   return tx as unknown as string;
@@ -167,6 +171,7 @@ export async function submitRunRecoveryCheck(
   const tx = await client.writeContract({
     address,
     functionName: "run_recovery_check",
+    value: 0n,
     args: [projectId],
   });
   return tx as unknown as string;
