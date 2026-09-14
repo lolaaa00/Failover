@@ -37,7 +37,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { createClient } from "genlayer-js";
+import { createClient, createAccount } from "genlayer-js";
 import { studionet } from "genlayer-js/chains";
 import { assertCanonicalNetwork, NETWORK_CONFIG } from "../lib/genlayer/network";
 
@@ -81,13 +81,15 @@ async function main() {
     return;
   }
 
-  // Deliberately left as the real, functioning integration point rather
-  // than a stub: once a funded key is supplied, genlayer-js's stable 1.1.8
-  // client is used exactly as it would be from the browser wallet path,
-  // just with a local account instead of window.ethereum.
+  // createAccount derives the viem LocalAccount (including public address)
+  // from the private key. The address is logged for the deployment record;
+  // the private key itself is never logged.
+  const account = createAccount(privateKey as `0x${string}`);
+  console.log(`Deployer address: ${account.address}`);
+
   const client = createClient({
     chain: studionet,
-    account: privateKey as `0x${string}`,
+    account,
   });
 
   const registrySource = readFileSync(REGISTRY_SOURCE_PATH, "utf-8");

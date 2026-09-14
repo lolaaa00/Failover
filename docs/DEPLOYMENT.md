@@ -88,27 +88,36 @@ npm run check:network
    this requires a funded signer and real network access and is **not** run in CI by
    default (opt-in only, per generic rule section 18).
 
-## Required deployment record (to be filled in and committed only once real)
-
-When a real deployment is performed, append a record here with every field actually
-produced — never fabricated or approximated:
+## Live deployment record
 
 ```
-Git SHA:                    <git rev-parse HEAD at deploy time>
-FailoverRegistry.py SHA-256: <sha256>
-FailoverGate.py SHA-256:     <sha256>
-Network:                     GenLayer Studionet (chain 61999)
-Public signer address:       <0x... deployer address, never the private key>
-FailoverRegistry deployment tx:  <tx hash>
-FailoverRegistry address:        <0x...>
-FailoverGate deployment tx:      <tx hash>
-FailoverGate address:            <0x...>
-Bound project_id:                <id used to construct FailoverGate>
-Final consensus status (both txs): <e.g. FINALIZED>
-Actual execution result:          <e.g. success / revert reason>
-Key lifecycle txs exercised:      <register_project / activate_project / run_safety_check tx hashes>
-Explorer links:                   https://explorer-studio.genlayer.com/tx/<hash> (one per tx above)
-Final readbacks:                  <get_status(...) / is_gate_open() output at time of writing>
+Date:                            2026-09-14
+Git SHA:                         b24ad1fc14bff719397da553605bbd6bc1385d21
+FailoverRegistry.py SHA-256:     a1e2b173caa44d0fe8fc819490d6921ab4f8e3ebe7e6e42d13d11bcde72741fe
+FailoverGate.py SHA-256:         01111f446848735328e0c589d4418c6d90294f1e8b0a064fd0f42a4c846e2d8f
+Network:                         GenLayer Studionet (chain 61999)
+RPC:                             https://studio.genlayer.com/api
+Public deployer address:         0x778D1663f9D5b338aBaD5C62899830AD3520a32F
+
+FailoverRegistry deployment tx:  0xcbfbc9667325f6f583dfb40568dcd717c53b4c314111972ddcb4f4acfa535c16
+FailoverRegistry address:        0x2A858500C75fC3880BB87CCd2C30Fd4c1AdE0A1a
+FailoverGate deployment tx:      0x86aa30a20e872e1390d614181aeaa3caa79d4d63910d2ed9430e203a2e3c0c34
+FailoverGate address:            0xD6fAA5b4EfA47393F92eA71787528C86F4bb736f
+Bound project_id:                failover-demo
+
+Consensus (both txs):            status=7 (FINALIZED), result=6 (SUCCESS)
+Validator votes (both):          5/5 agree
+Execution result (both):         SUCCESS (GenVM return, no error)
+
+Explorer (registry):  https://explorer-studio.genlayer.com/address/0x2A858500C75fC3880BB87CCd2C30Fd4c1AdE0A1a
+Explorer (gate):      https://explorer-studio.genlayer.com/address/0xD6fAA5b4EfA47393F92eA71787528C86F4bb736f
+Explorer (registry tx): https://explorer-studio.genlayer.com/tx/0xcbfbc9667325f6f583dfb40568dcd717c53b4c314111972ddcb4f4acfa535c16
+Explorer (gate tx):     https://explorer-studio.genlayer.com/tx/0x86aa30a20e872e1390d614181aeaa3caa79d4d63910d2ed9430e203a2e3c0c34
 ```
 
-No entry has been added to this section because no deployment has occurred.
+## Frontend env vars (set in Vercel dashboard)
+
+```
+NEXT_PUBLIC_FAILOVER_REGISTRY_ADDRESS=0x2A858500C75fC3880BB87CCd2C30Fd4c1AdE0A1a
+NEXT_PUBLIC_FAILOVER_GATE_ADDRESS=0xD6fAA5b4EfA47393F92eA71787528C86F4bb736f
+```
