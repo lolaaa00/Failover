@@ -1,8 +1,22 @@
 # Deployment
 
-## Current status: NOT deployed
+## Frontend deployment
 
-**No funded Studionet signer is available in this build environment.** Neither
+| Field | Value |
+|-------|-------|
+| Platform | Vercel |
+| Production URL | https://failover-black.vercel.app |
+| Alias | https://failover-lolaas-projects.vercel.app |
+| Build | Vercel deployment `dpl_B2cgZXb5rEf9pY5EnzZ8uZ7W7DZn` |
+| Mode | Demo/fixture mode (no contract addresses configured yet) |
+| Chain | Will target chain 61999 once contracts are deployed |
+| Demo route | https://failover-black.vercel.app/demo |
+
+The frontend runs in **demo mode** until contract addresses are set. In demo mode an amber banner is shown on all `/p/[id]` and `/gate/[id]` pages; the `/demo` route provides the full SAFE → RESTRICTED → RECOVERY\_PENDING → SAFE walkthrough using canonical fixtures. Once real contract addresses are set via `NEXT_PUBLIC_FAILOVER_REGISTRY_ADDRESS` and `NEXT_PUBLIC_FAILOVER_GATE_ADDRESS` in the Vercel dashboard, the frontend switches to live mode automatically.
+
+## Contract deployment status: NOT deployed
+
+**No funded Studionet signer has been used yet.** Neither
 `FailoverRegistry` nor `FailoverGate` has been deployed to chain 61999. No address, no
 transaction hash, and no deployment record anywhere in this repository should be read
 as evidence of a live deployment — none exists yet. `lib/contract/addresses.ts` has no
