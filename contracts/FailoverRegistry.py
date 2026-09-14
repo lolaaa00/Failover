@@ -48,6 +48,7 @@ FINDINGS = (
 
 STATUSES = (
     "DRAFT",
+    "PENDING_FIRST_CHECK",
     "SAFE",
     "CHECKING",
     "RESTRICTED",
@@ -112,6 +113,8 @@ def validate_public_url(raw_url: str) -> str:
     - reject embedded credentials (userinfo@)
     - reject fragments that would affect identity
     - reject localhost / private / loopback targets
+    - reject IPv6 literals
+    - restrict to standard web ports (443 or 80)
     - canonicalize host/path
 
     Returns the canonicalized URL or raises ValueError.
@@ -130,6 +133,9 @@ def validate_public_url(raw_url: str) -> str:
     if m.group("frag"):
         raise ValueError("url must not carry an identity-affecting fragment")
     host = m.group("host").lower()
+    # Reject IPv6 literals (e.g. [::1])
+    if host.startswith("["):
+        raise ValueError("url must not use IPv6 literals")
     for pat in _PRIVATE_HOST_PATTERNS:
         if host == pat or host.startswith(pat):
             raise ValueError("url resolves to a private/localhost target")
@@ -137,6 +143,9 @@ def validate_public_url(raw_url: str) -> str:
         raise ValueError("url resolves to a private network target")
     if "." not in host:
         raise ValueError("url host must be a fully qualified domain")
+    port = m.group("port")
+    if port is not None and port not in ("443", "80"):
+        raise ValueError("url must use standard web port (443 or 80)")
     return canonicalize_url(raw_url)
 
 
@@ -222,23 +231,92 @@ def material_fields_match(a: dict, b: dict) -> bool:
     if a["finding"] != "UNAVAILABLE":
         if not any(item.get("excerpt") for item in a.get("evidence", [])):
             return False
+    # For COMPROMISED/IMPERSONATED, ALL evidence items must have non-empty excerpts.
+    if a["finding"] in ("COMPROMISED", "IMPERSONATED"):
+        for item in a.get("evidence", []):
+            if not item.get("excerpt"):
+                return False
+    # Validate source roles in evidence
+    valid_source_roles = {"frontend", "release", "incident"}
+    for item in a.get("evidence", []):
+        if item.get("source") not in valid_source_roles:
+            return False
+    # The set of source roles with non-empty excerpts must match between leader and validator.
+    a_roles = {item["source"] for item in a.get("evidence", []) if item.get("excerpt")}
+    b_roles = {item["source"] for item in b.get("evidence", []) if item.get("excerpt")}
+    if a_roles != b_roles:
+        return False
     return True
 
 
+def _verify_excerpts_grounded(leader_candidate: dict, validator_fetched: dict) -> bool:
+    """Each leader excerpt must appear (case-insensitive substring) in the
+    validator's own independently fetched content for that source role."""
+    for item in leader_candidate.get("evidence", []):
+        excerpt = item.get("excerpt", "")
+        source_role = item.get("source", "")
+        if not excerpt:
+            continue  # empty excerpts are ignored
+        fetched_content = validator_fetched.get(source_role, "") or ""
+        if excerpt.lower() not in fetched_content.lower():
+            return False  # leader claimed an excerpt not present in validator-fetched content
+    return True
+
+
+def _verify_source_coverage_matches(leader_candidate: dict, validator_candidate: dict) -> bool:
+    """The set of source roles with non-empty excerpts must be the same between
+    leader and validator — a missing source role is a material disagreement."""
+    leader_roles = {item["source"] for item in leader_candidate.get("evidence", []) if item.get("excerpt")}
+    validator_roles = {item["source"] for item in validator_candidate.get("evidence", []) if item.get("excerpt")}
+    return leader_roles == validator_roles
+
+
 def map_finding_to_status(
-    finding: str,
-    incident_state: str,
+    finding_or_dict,
+    incident_state: str = None,
     stale_release_policy: str = "RESTRICTED",
     unavailable_policy: str = "RESTRICTED",
 ) -> str:
     """Deterministic restriction mapping (Failover spec section 9).
+
+    finding_or_dict may be a bare finding string (legacy callers) or the full
+    finding dict. When a full dict is passed, CLEAN is only mapped to SAFE if
+    ALL of the following are positive: frontend_identity==MATCH,
+    release_relation==CURRENT, incident_state in (NONE, RESOLVED),
+    expected_address_relation in (MATCH, NOT_VISIBLE). Any deviation degrades
+    to RESTRICTED or INCONCLUSIVE even if the top-level finding is CLEAN.
 
     stale_release_policy / unavailable_policy come from the project's sealed
     recovery policy chosen at registration time (immutable after activation),
     so the mapping itself stays a pure deterministic function of on-chain
     inputs — never an owner override at check time.
     """
+    # Support both full-dict and bare-string callers.
+    if isinstance(finding_or_dict, dict):
+        finding_dict = finding_or_dict
+        finding = finding_dict.get("finding", "INCONCLUSIVE")
+        if incident_state is None:
+            incident_state = finding_dict.get("incident_state", "UNCLEAR")
+    else:
+        finding = finding_or_dict
+        if incident_state is None:
+            incident_state = "UNCLEAR"
+
     if finding == "CLEAN":
+        # Multi-field gate: ALL positive conditions required for SAFE.
+        if isinstance(finding_or_dict, dict):
+            fi = finding_or_dict.get("frontend_identity")
+            rr = finding_or_dict.get("release_relation")
+            is_ = finding_or_dict.get("incident_state")
+            ear = finding_or_dict.get("expected_address_relation")
+            all_positive = (
+                fi == "MATCH"
+                and rr == "CURRENT"
+                and is_ in ("NONE", "RESOLVED")
+                and ear in ("MATCH", "NOT_VISIBLE")
+            )
+            if not all_positive:
+                return "RESTRICTED"
         return "SAFE"
     if finding == "COMPROMISED":
         return "RESTRICTED"
@@ -257,6 +335,7 @@ def map_finding_to_status(
 
 
 def is_status_safe(status: str) -> bool:
+    # PENDING_FIRST_CHECK is NOT safe — the gate must refuse until first consensus.
     return status == "SAFE" or status == "RECOVERED"
 
 
@@ -318,6 +397,12 @@ class FailoverRegistry(gl.Contract):
         raw = self.check_history.get(project_id)
         history = json.loads(raw) if raw else []
         history.append(record)
+        # Cap history to last 100 entries to bound storage growth.
+        if len(history) >= 100:
+            count = len(history)
+            history = history[-99:]
+            now = record.get("at", 0)
+            history.insert(0, {"type": "TRUNCATED", "at": now, "count": count})
         self.check_history[project_id] = json.dumps(history)
 
     def _tx_time(self) -> int:
@@ -448,7 +533,10 @@ class FailoverRegistry(gl.Contract):
             raise Exception("only owner may activate")
         if project["status"] != "DRAFT":
             raise Exception("already activated")
-        project["status"] = "SAFE"
+        # Activation transitions to PENDING_FIRST_CHECK, not SAFE.
+        # SAFE is only reached after a successful consensus safety check.
+        # This ensures the gate fails closed until first verified consensus.
+        project["status"] = "PENDING_FIRST_CHECK"
         project["activated_at"] = self._tx_time()
         self._save_project(project_id, project)
 
@@ -469,7 +557,13 @@ class FailoverRegistry(gl.Contract):
     def _independently_fetch_and_normalize(self, project: dict) -> dict:
         """Fetch the three sealed sources and bound their content. Runs
         identically for leader and every validator (each executes this
-        function independently inside its own nondet context)."""
+        function independently inside its own nondet context).
+
+        Note: GenVM's web fetch boundary enforces network-level isolation;
+        DNS resolution and redirect following happen inside the GenVM sandbox,
+        not in contract code. Private IP redirect targets are blocked at the
+        GenVM boundary. Documented in docs/SECURITY.md.
+        """
         sources = {
             "frontend": project["frontend_url"],
             "release": project["release_url"],
@@ -599,6 +693,7 @@ class FailoverRegistry(gl.Contract):
         project = self._load_project(project_id)
         if project["status"] in ("DRAFT", "RETIRED"):
             raise Exception("project not in a checkable state")
+        # PENDING_FIRST_CHECK is explicitly allowed — this is the first check after activation.
 
         now = self._tx_time()
         last = int(self.last_check_at.get(project_id, u256(0)))
@@ -623,6 +718,12 @@ class FailoverRegistry(gl.Contract):
                 return False
             fetched = self._independently_fetch_and_normalize(project)
             expected = self._derive_candidate(project, fetched)
+            # Verify that leader excerpts are grounded in validator-fetched content.
+            if not _verify_excerpts_grounded(candidate, fetched):
+                return False
+            # Verify source coverage matches between leader and validator.
+            if not _verify_source_coverage_matches(candidate, expected):
+                return False
             return material_fields_match(candidate, expected)
 
         result = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
@@ -643,8 +744,8 @@ class FailoverRegistry(gl.Contract):
             finding_result = result
 
         new_status = map_finding_to_status(
-            finding_result["finding"],
-            finding_result["incident_state"],
+            finding_result,
+            None,
             project["stale_release_policy"],
             project["unavailable_policy"],
         )
@@ -704,6 +805,9 @@ class FailoverRegistry(gl.Contract):
         # same source unchanged when a frontend replacement is required).
         if new_release_c == project["release_url"]:
             raise Exception("recovery release must be a new version, not the existing one")
+        # Also reject URLs used in any previous recovery attempt.
+        if new_release_c in used:
+            raise Exception("recovery URL was already used in a prior attempt")
 
         used.append(new_release_c)
         if new_frontend_c:
@@ -762,6 +866,12 @@ class FailoverRegistry(gl.Contract):
                 return False
             fetched = self._independently_fetch_and_normalize(project)
             expected = self._derive_candidate(project, fetched)
+            # Verify that leader excerpts are grounded in validator-fetched content.
+            if not _verify_excerpts_grounded(candidate, fetched):
+                return False
+            # Verify source coverage matches between leader and validator.
+            if not _verify_source_coverage_matches(candidate, expected):
+                return False
             return material_fields_match(candidate, expected)
 
         result = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)

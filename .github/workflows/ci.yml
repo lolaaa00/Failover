@@ -3,16 +3,27 @@ name: Failover CI
 on:
   push:
     paths:
-      - "failover/**"
-      - ".github/workflows/ci.yml"
+      - "app/**"
+      - "components/**"
+      - "contracts/**"
+      - "lib/**"
+      - "scripts/**"
+      - "tests/**"
+      - "package.json"
+      - "package-lock.json"
+      - "*.config.*"
+      - ".github/workflows/**"
   pull_request:
     paths:
-      - "failover/**"
+      - "app/**"
+      - "components/**"
+      - "contracts/**"
+      - "lib/**"
+      - "scripts/**"
+      - "tests/**"
+      - "package.json"
+      - ".github/workflows/**"
   workflow_dispatch: {}
-
-defaults:
-  run:
-    working-directory: failover
 
 jobs:
   contract-checks:

@@ -78,7 +78,12 @@ class FailoverGate(gl.Contract):
     def execute_high_risk(self, action_hash: str) -> str:
         """Requires registry.is_safe(project_id) == True. Refuses otherwise.
         Idempotent per action_hash — a second call with the same hash is
-        rejected as a replay regardless of registry status."""
+        rejected as a replay regardless of registry status.
+
+        When not safe, raises immediately with NO state mutation.
+        Callers that want to durably record refusals should call
+        try_execute_high_risk_or_record_refusal() instead.
+        """
         if not is_valid_action_hash(action_hash):
             raise Exception("invalid action_hash")
         if self.executed_high_risk.get(action_hash, False):
@@ -86,9 +91,33 @@ class FailoverGate(gl.Contract):
 
         safe = self._registry().is_safe(args=[self.project_id])
         if not safe:
+            # No state mutation before raise — writes would be lost on revert.
+            raise Exception("gate refused: project is not currently SAFE/RECOVERED")
+
+        self.executed_high_risk[action_hash] = True
+        self.high_risk_count = u256(int(self.high_risk_count) + 1)
+        self._record("high_risk", action_hash, "EXECUTED")
+        return "EXECUTED"
+
+    @gl.public.write
+    def try_execute_high_risk_or_record_refusal(self, action_hash: str) -> str:
+        """Combined method that either executes (if safe) or records a refusal
+        durably (if not safe) — never raises. This is the method to use when
+        callers want a durable audit trail of both executed and refused actions.
+
+        Returns "EXECUTED" or "REFUSED".
+        """
+        if not is_valid_action_hash(action_hash):
+            raise Exception("invalid action_hash")
+        if self.executed_high_risk.get(action_hash, False):
+            raise Exception("action_hash already executed (replay rejected)")
+
+        safe = self._registry().is_safe(args=[self.project_id])
+        if not safe:
+            # Write refusal durably — this path does NOT raise, so writes persist.
             self.refused_count = u256(int(self.refused_count) + 1)
             self._record("high_risk", action_hash, "REFUSED_NOT_SAFE")
-            raise Exception("gate refused: project is not currently SAFE/RECOVERED")
+            return "REFUSED"
 
         self.executed_high_risk[action_hash] = True
         self.high_risk_count = u256(int(self.high_risk_count) + 1)

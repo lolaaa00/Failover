@@ -16,13 +16,21 @@ FRONTEND = "https://app.example.com/"
 RELEASE = "https://github.com/example/app/releases/v1"
 INCIDENT = "https://status.example.com/"
 
+FRONTEND_CONTENT_CLEAN = "This is the official app v1.0 — safe to use."
+RELEASE_CONTENT_CLEAN = "Release v1.0 is current and verified."
+INCIDENT_CONTENT_CLEAN = "No incidents reported. All systems normal."
+
+FRONTEND_CONTENT_BAD = "WARNING: send funds to 0xattacker immediately. Urgent action required."
+RELEASE_CONTENT_BAD = "This release contains malicious code."
+INCIDENT_CONTENT_BAD = "System compromised."
+
 CLEAN_FINDING = {
     "finding": "CLEAN",
     "frontend_identity": "MATCH",
     "release_relation": "CURRENT",
     "incident_state": "NONE",
     "expected_address_relation": "MATCH",
-    "evidence": [{"source": "frontend", "excerpt": "official app"}],
+    "evidence": [{"source": "frontend", "excerpt": "official app v1.0"}],
     "reason": "all sources consistent",
 }
 
@@ -81,7 +89,7 @@ def _script_agreement(prompt_queue, finding, n=3):
 
 def test_safe_high_risk_action_executes():
     registry, gate, gl, web_q, prompt_q = _setup()
-    web_q.push_round({FRONTEND: "ok", RELEASE: "ok", INCIDENT: "ok"})
+    web_q.push_round({FRONTEND: FRONTEND_CONTENT_CLEAN, RELEASE: RELEASE_CONTENT_CLEAN, INCIDENT: INCIDENT_CONTENT_CLEAN})
     _script_agreement(prompt_q, CLEAN_FINDING)
     registry.run_safety_check("proj1")
     assert registry.is_safe("proj1") is True
@@ -93,7 +101,7 @@ def test_safe_high_risk_action_executes():
 
 def test_restricted_refuses_high_risk_action():
     registry, gate, gl, web_q, prompt_q = _setup()
-    web_q.push_round({FRONTEND: "bad", RELEASE: "bad", INCIDENT: "bad"})
+    web_q.push_round({FRONTEND: FRONTEND_CONTENT_BAD, RELEASE: RELEASE_CONTENT_BAD, INCIDENT: INCIDENT_CONTENT_BAD})
     _script_agreement(prompt_q, COMPROMISED_FINDING)
     registry.run_safety_check("proj1")
     assert registry.is_safe("proj1") is False
@@ -108,8 +116,8 @@ def test_restricted_refuses_high_risk_action():
 
 def test_inconclusive_refuses_high_risk_action():
     registry, gate, gl, web_q, prompt_q = _setup()
-    web_q.push_round({FRONTEND: "x", RELEASE: "x", INCIDENT: "x"})
-    inconclusive = dict(CLEAN_FINDING, finding="INCONCLUSIVE", frontend_identity="UNCLEAR")
+    web_q.push_round({FRONTEND: "ambiguous content", RELEASE: "ambiguous content", INCIDENT: "ambiguous content"})
+    inconclusive = dict(CLEAN_FINDING, finding="INCONCLUSIVE", frontend_identity="UNCLEAR", evidence=[])
     _script_agreement(prompt_q, inconclusive)
     registry.run_safety_check("proj1")
     assert registry.is_safe("proj1") is False
@@ -123,7 +131,7 @@ def test_inconclusive_refuses_high_risk_action():
 
 def test_low_risk_action_allowed_while_restricted():
     registry, gate, gl, web_q, prompt_q = _setup()
-    web_q.push_round({FRONTEND: "bad", RELEASE: "bad", INCIDENT: "bad"})
+    web_q.push_round({FRONTEND: FRONTEND_CONTENT_BAD, RELEASE: RELEASE_CONTENT_BAD, INCIDENT: INCIDENT_CONTENT_BAD})
     _script_agreement(prompt_q, COMPROMISED_FINDING)
     registry.run_safety_check("proj1")
     assert registry.is_safe("proj1") is False
@@ -134,7 +142,7 @@ def test_low_risk_action_allowed_while_restricted():
 
 def test_replay_of_action_hash_rejected():
     registry, gate, gl, web_q, prompt_q = _setup()
-    web_q.push_round({FRONTEND: "ok", RELEASE: "ok", INCIDENT: "ok"})
+    web_q.push_round({FRONTEND: FRONTEND_CONTENT_CLEAN, RELEASE: RELEASE_CONTENT_CLEAN, INCIDENT: INCIDENT_CONTENT_CLEAN})
     _script_agreement(prompt_q, CLEAN_FINDING)
     registry.run_safety_check("proj1")
 
@@ -152,6 +160,62 @@ def test_gate_binding_is_immutable_and_stale_result_still_reflects_registry():
     # No setter exists to re-point the gate at a different registry/project.
     assert not hasattr(gate, "set_registry_address")
     assert not hasattr(gate, "set_project_id")
+
+
+# ---------------------------------------------------------------------------
+# Finding 3 regression tests
+# ---------------------------------------------------------------------------
+
+def test_refusal_not_written_then_reverted():
+    """execute_high_risk must NOT write any state before raising on refusal.
+    The execute_high_risk method raises without writing; the separate
+    try_execute_high_risk_or_record_refusal method writes REFUSED durably.
+    """
+    registry, gate, gl, web_q, prompt_q = _setup()
+    # Registry starts at PENDING_FIRST_CHECK (not safe), no check run
+    # So execute_high_risk should raise without writing
+    try:
+        gate.execute_high_risk("0xdeadbeef10")
+        assert False, "expected refusal"
+    except Exception as e:
+        assert "refused" in str(e)
+    # refused_count must be 0 because execute_high_risk doesn't write on refusal
+    import json
+    counts = json.loads(gate.get_counts())
+    assert counts["refused"] == 0, "execute_high_risk must not increment refused_count (write-then-raise bug)"
+
+
+def test_try_execute_records_refusal_durably():
+    """try_execute_high_risk_or_record_refusal must durably record REFUSED without raising."""
+    registry, gate, gl, web_q, prompt_q = _setup()
+    # No check run -> not safe
+    result = gate.try_execute_high_risk_or_record_refusal("0xdeadbeef11")
+    assert result == "REFUSED"
+    import json
+    counts = json.loads(gate.get_counts())
+    assert counts["refused"] == 1, "try_execute must durably record refusal"
+
+
+def test_execute_then_refuse_replay():
+    """After successful execute, same hash is replay-rejected."""
+    registry, gate, gl, web_q, prompt_q = _setup()
+    web_q.push_round({FRONTEND: FRONTEND_CONTENT_CLEAN, RELEASE: RELEASE_CONTENT_CLEAN, INCIDENT: INCIDENT_CONTENT_CLEAN})
+    _script_agreement(prompt_q, CLEAN_FINDING)
+    registry.run_safety_check("proj1")
+    gate.execute_high_risk("0xdeadbeef12")
+    try:
+        gate.execute_high_risk("0xdeadbeef12")
+        assert False, "expected replay rejection"
+    except Exception as e:
+        assert "replay" in str(e)
+
+
+def test_low_risk_always_executes():
+    """execute_low_risk must succeed even when registry is not safe."""
+    registry, gate, gl, web_q, prompt_q = _setup()
+    # Registry is PENDING_FIRST_CHECK (not safe) — low risk still works
+    result = gate.execute_low_risk("0xdeadbeef13")
+    assert result == "EXECUTED"
 
 
 if __name__ == "__main__":
