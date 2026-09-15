@@ -15,7 +15,15 @@ describe("frontend URL hardening (mirrors contracts/FailoverRegistry.py)", () =>
     expect(() => validatePublicUrl("http://example.com")).toThrow(UrlValidationError);
   });
 
-  it.each(["https://localhost/x", "https://127.0.0.1/x", "https://10.0.0.1/x", "https://192.168.0.1/x"])(
+  it.each([
+    "https://localhost/x",
+    "https://127.0.0.1/x",
+    "https://127.0.0.2/x",
+    "https://10.0.0.1/x",
+    "https://172.16.0.1/x",
+    "https://192.168.0.1/x",
+    "https://8.8.8.8/x",
+  ])(
     "rejects private/localhost target %s",
     (bad) => {
       expect(() => validatePublicUrl(bad)).toThrow(UrlValidationError);
@@ -28,6 +36,16 @@ describe("frontend URL hardening (mirrors contracts/FailoverRegistry.py)", () =>
 
   it("rejects an identity-affecting fragment", () => {
     expect(() => validatePublicUrl("https://example.com/x#frag")).toThrow(UrlValidationError);
+  });
+
+  it.each([
+    "https://example.com:80/app",
+    "https://example.com:8443/app",
+    "https://bad_host.example.com/app",
+    "https://-bad.example.com/app",
+    "https://bad-.example.com/app",
+  ])("rejects host and port edge case %s", (bad) => {
+    expect(() => validatePublicUrl(bad)).toThrow(UrlValidationError);
   });
 
   it("rejects over-length URLs", () => {

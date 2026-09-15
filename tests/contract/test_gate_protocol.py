@@ -30,7 +30,11 @@ CLEAN_FINDING = {
     "release_relation": "CURRENT",
     "incident_state": "NONE",
     "expected_address_relation": "MATCH",
-    "evidence": [{"source": "frontend", "excerpt": "official app v1.0"}],
+    "evidence": [
+        {"source": "frontend", "excerpt": "official app v1.0"},
+        {"source": "release", "excerpt": "Release v1.0 is current"},
+        {"source": "incident", "excerpt": "No incidents reported"},
+    ],
     "reason": "all sources consistent",
 }
 

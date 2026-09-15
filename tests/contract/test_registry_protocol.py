@@ -52,7 +52,11 @@ CLEAN_FINDING = {
     "release_relation": "CURRENT",
     "incident_state": "NONE",
     "expected_address_relation": "MATCH",
-    "evidence": [{"source": "frontend", "excerpt": "official app v1.0"}],
+    "evidence": [
+        {"source": "frontend", "excerpt": "official app v1.0"},
+        {"source": "release", "excerpt": "Release v1.0 is current"},
+        {"source": "incident", "excerpt": "No incidents reported"},
+    ],
     "reason": "all sources consistent",
 }
 
@@ -130,6 +134,33 @@ def test_source_unavailable_is_not_falsely_compromised():
     project = json.loads(contract.get_project("proj1"))
     assert project["last_finding"] == "UNAVAILABLE"
     assert project["last_finding"] != "COMPROMISED"
+    assert contract.is_safe("proj1") is False
+
+
+def test_each_missing_source_combination_fails_closed():
+    missing_cases = [
+        (None, RELEASE_CONTENT_CLEAN, INCIDENT_CONTENT_CLEAN),
+        (FRONTEND_CONTENT_CLEAN, None, INCIDENT_CONTENT_CLEAN),
+        (FRONTEND_CONTENT_CLEAN, RELEASE_CONTENT_CLEAN, None),
+        ("", RELEASE_CONTENT_CLEAN, INCIDENT_CONTENT_CLEAN),
+        (FRONTEND_CONTENT_CLEAN, "", INCIDENT_CONTENT_CLEAN),
+        (FRONTEND_CONTENT_CLEAN, RELEASE_CONTENT_CLEAN, ""),
+    ]
+    for idx, (frontend_content, release_content, incident_content) in enumerate(missing_cases):
+        contract, gl, web_q, prompt_q, reg_mod = _fresh_registry()
+        project_id = f"missing-{idx}"
+        _register_and_activate(contract, gl, project_id)
+        mapping = {
+            FRONTEND: Exception("fetch failed") if frontend_content is None else frontend_content,
+            RELEASE: Exception("fetch failed") if release_content is None else release_content,
+            INCIDENT: Exception("fetch failed") if incident_content is None else incident_content,
+        }
+        web_q.push_round(mapping)
+        _script_agreement(prompt_q, CLEAN_FINDING)
+        contract.run_safety_check(project_id)
+        assert contract.get_status(project_id) == "RESTRICTED"
+        assert json.loads(contract.get_project(project_id))["last_finding"] == "UNAVAILABLE"
+        assert contract.is_safe(project_id) is False
 
 
 def test_expected_address_mismatch_restricts():
@@ -223,7 +254,7 @@ def test_successful_recovery_requires_fresh_consensus():
     new_release = "https://github.com/example/app/releases/v2"
     contract.submit_recovery("proj1", new_release, None, "rotated compromised deploy keys")
 
-    web_q.push_round({FRONTEND: FRONTEND_CONTENT_CLEAN, RELEASE: RELEASE_CONTENT_CLEAN, INCIDENT: INCIDENT_CONTENT_CLEAN})
+    web_q.push_round({FRONTEND: FRONTEND_CONTENT_CLEAN, new_release: RELEASE_CONTENT_CLEAN, INCIDENT: INCIDENT_CONTENT_CLEAN})
     recovered_finding = dict(
         CLEAN_FINDING,
         incident_state="RESOLVED",
@@ -234,6 +265,31 @@ def test_successful_recovery_requires_fresh_consensus():
     contract.mark_recovered_safe("proj1")
     assert contract.get_status("proj1") == "SAFE"
     assert contract.is_safe("proj1") is True
+
+
+def test_recovery_clean_missing_evidence_stays_pending():
+    contract, gl, web_q, prompt_q, reg_mod = _fresh_registry()
+    _register_and_activate(contract, gl)
+    web_q.push_round({FRONTEND: FRONTEND_CONTENT_BAD, RELEASE: RELEASE_CONTENT_BAD, INCIDENT: INCIDENT_CONTENT_BAD})
+    _script_agreement(prompt_q, COMPROMISED_FINDING)
+    contract.run_safety_check("proj1")
+    contract.submit_recovery(
+        "proj1",
+        "https://github.com/example/app/releases/v2",
+        None,
+        "rotated compromised deploy keys",
+    )
+
+    web_q.push_round({
+        FRONTEND: FRONTEND_CONTENT_CLEAN,
+        "https://github.com/example/app/releases/v2": RELEASE_CONTENT_CLEAN,
+        INCIDENT: INCIDENT_CONTENT_CLEAN,
+    })
+    under_evidenced = dict(CLEAN_FINDING, evidence=[{"source": "frontend", "excerpt": "official app v1.0"}])
+    _script_agreement(prompt_q, under_evidenced)
+    contract.run_recovery_check("proj1")
+    assert contract.get_status("proj1") == "RECOVERY_PENDING"
+    assert contract.is_safe("proj1") is False
 
 
 def test_history_is_immutable_append_only():
@@ -263,12 +319,12 @@ def test_activation_goes_to_pending_first_check():
     """activate_project must set status to PENDING_FIRST_CHECK, not SAFE."""
     contract, gl, web_q, prompt_q, reg_mod = _fresh_registry()
     contract.register_project(
-        "proj_pfc", "PFC App", FRONTEND, RELEASE, INCIDENT,
+        "proj-pfc", "PFC App", FRONTEND, RELEASE, INCIDENT,
         "0xexpectedaddress", 300, "RESTRICTED", "RESTRICTED",
     )
-    contract.activate_project("proj_pfc")
-    assert contract.get_status("proj_pfc") == "PENDING_FIRST_CHECK"
-    assert contract.is_safe("proj_pfc") is False
+    contract.activate_project("proj-pfc")
+    assert contract.get_status("proj-pfc") == "PENDING_FIRST_CHECK"
+    assert contract.is_safe("proj-pfc") is False
 
 
 def test_gate_refuses_during_pending_first_check():
@@ -283,12 +339,12 @@ def test_gate_refuses_during_pending_first_check():
     reg_mod2 = importlib.import_module("FailoverRegistry")
     registry = reg_mod2.FailoverRegistry()
     registry.register_project(
-        "proj_pfc2", "PFC App", FRONTEND, RELEASE, INCIDENT,
+        "proj-pfc2", "PFC App", FRONTEND, RELEASE, INCIDENT,
         "0xexpectedaddress", 300, "RESTRICTED", "RESTRICTED",
     )
-    registry.activate_project("proj_pfc2")
-    assert registry.get_status("proj_pfc2") == "PENDING_FIRST_CHECK"
-    assert registry.is_safe("proj_pfc2") is False
+    registry.activate_project("proj-pfc2")
+    assert registry.get_status("proj-pfc2") == "PENDING_FIRST_CHECK"
+    assert registry.is_safe("proj-pfc2") is False
 
 
 def test_clean_with_mismatch_fields_not_safe():
@@ -353,6 +409,27 @@ def test_fabricated_excerpt_rejected_by_validator():
     assert contract.get_status("proj1") == "RESTRICTED"
 
 
+def test_changed_validator_content_rejected_by_commitment():
+    contract, gl, web_q, prompt_q, reg_mod = _fresh_registry()
+    _register_and_activate(contract, gl)
+    web_q.push_round({FRONTEND: FRONTEND_CONTENT_CLEAN, RELEASE: RELEASE_CONTENT_CLEAN, INCIDENT: INCIDENT_CONTENT_CLEAN})
+    web_q.push_round({
+        FRONTEND: FRONTEND_CONTENT_CLEAN.replace("official", "counterfeit"),
+        RELEASE: RELEASE_CONTENT_CLEAN,
+        INCIDENT: INCIDENT_CONTENT_CLEAN,
+    })
+    web_q.push_round({
+        FRONTEND: FRONTEND_CONTENT_CLEAN.replace("official", "counterfeit"),
+        RELEASE: RELEASE_CONTENT_CLEAN,
+        INCIDENT: INCIDENT_CONTENT_CLEAN,
+    })
+    _script_agreement(prompt_q, CLEAN_FINDING)
+    contract.run_safety_check("proj1")
+    assert contract.get_status("proj1") == "RESTRICTED"
+    history = json.loads(contract.get_history("proj1"))
+    assert history[-1]["finding"]["finding"] == "INCONCLUSIVE"
+
+
 def test_empty_excerpt_for_compromised_rejected():
     """COMPROMISED finding with empty excerpt fails material_fields_match."""
     from fakes import make_fake_genlayer_module, reset_genlayer_fake
@@ -381,6 +458,34 @@ def test_wrong_source_role_rejected():
     reg_mod3 = _importlib.import_module("FailoverRegistry")
     bad_shape = dict(CLEAN_FINDING, evidence=[{"source": "twitter", "excerpt": "some text"}])
     assert reg_mod3.validate_finding_shape(bad_shape) is False
+
+
+def test_malicious_leader_omitted_required_evidence_rejected():
+    contract, gl, web_q, prompt_q, reg_mod = _fresh_registry()
+    _register_and_activate(contract, gl)
+    web_q.push_round({FRONTEND: FRONTEND_CONTENT_CLEAN, RELEASE: RELEASE_CONTENT_CLEAN, INCIDENT: INCIDENT_CONTENT_CLEAN})
+    leader = dict(CLEAN_FINDING, evidence=[{"source": "frontend", "excerpt": "official app v1.0"}])
+    prompt_q.push(leader)
+    prompt_q.push(dict(CLEAN_FINDING))
+    prompt_q.push(dict(CLEAN_FINDING))
+    contract.run_safety_check("proj1")
+    assert contract.get_status("proj1") == "RESTRICTED"
+
+
+def test_receipt_commits_to_bounded_content_and_evidence():
+    contract, gl, web_q, prompt_q, reg_mod = _fresh_registry()
+    _register_and_activate(contract, gl)
+    long_frontend = "This is the official app v1.0 " + ("x" * (reg_mod.MAX_FETCH_BYTES + 100))
+    web_q.push_round({FRONTEND: long_frontend, RELEASE: RELEASE_CONTENT_CLEAN, INCIDENT: INCIDENT_CONTENT_CLEAN})
+    _script_agreement(prompt_q, CLEAN_FINDING)
+    contract.run_safety_check("proj1")
+    history = json.loads(contract.get_history("proj1"))
+    record = history[-1]
+    assert record["new_status"] == "SAFE"
+    assert len(record["evaluated_sources"]) == 3
+    frontend_commitment = next(s for s in record["evaluated_sources"] if s["source"] == "frontend")
+    assert frontend_commitment["evaluated_length"] == reg_mod.MAX_FETCH_BYTES
+    assert record["evidence_digest"] == record["finding"]["evidence_digest"]
 
 
 # ---------------------------------------------------------------------------

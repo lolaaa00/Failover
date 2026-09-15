@@ -2,6 +2,11 @@ import type { ProjectStatus } from "@/lib/contract/types";
 
 const STATUS_META: Record<ProjectStatus, { label: string; color: string; description: string }> = {
   DRAFT: { label: "DRAFT", color: "text-cockpit-white/50 border-cockpit-white/30", description: "Not yet activated" },
+  PENDING_FIRST_CHECK: {
+    label: "PENDING FIRST CHECK",
+    color: "text-caution-amber border-caution-amber",
+    description: "Gate closed until first consensus",
+  },
   SAFE: { label: "SAFE", color: "text-safe-green border-safe-green", description: "Consensus-confirmed clean" },
   CHECKING: { label: "CHECKING", color: "text-avionics-blue border-avionics-blue", description: "Consensus in progress" },
   RESTRICTED: { label: "RESTRICTED", color: "text-emergency-red border-emergency-red", description: "High-risk actions gated" },

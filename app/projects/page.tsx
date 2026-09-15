@@ -15,13 +15,13 @@ export default function ProjectsPage() {
       </div>
       <p className="text-cockpit-white/60 text-sm max-w-xl">
         No project is deployed to a live Studionet address in this build (no funded signer was
-        available). The demo project below is a fully wired canonical fixture — walk its full
-        lifecycle from the project dossier.
+        available). The demo project below is a fully wired canonical fixture; walk its full
+        lifecycle from the dedicated demo route.
       </p>
       <ul className="space-y-3">
         <li>
           <Link
-            href={`/p/${demo.project_id}`}
+            href="/demo"
             className="checksum-plate p-5 flex items-center justify-between hover:border-avionics-blue/60 transition-colors block"
           >
             <div>

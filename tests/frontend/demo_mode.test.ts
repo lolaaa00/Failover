@@ -22,6 +22,7 @@ describe("test_demo_banner_shown_without_address", () => {
     expect(isDeployed("0x")).toBe(false);       // too short
     expect(isDeployed("0x1234")).toBe(false);    // too short
     expect(isDeployed("0x" + "a".repeat(41))).toBe(false);  // too long
+    expect(isDeployed("0x" + "z".repeat(40))).toBe(false);  // not hex
   });
 
   it("demo mode (no address) means !isDeployed is true — banner must be shown", () => {
@@ -46,7 +47,7 @@ describe("test_live_mode_not_fixture_fallback", () => {
     expect(isLiveMode).toBe(true);
   });
 
-  it("live mode must not fall back to fixture data — not-found shown for unknown project", () => {
+  it("live mode must not fall back to fixture data", () => {
     // Structural test: the branch predicate correctly separates live from demo.
     // In live mode (isDeployed true), pages show not-found instead of fixtures.
     const DEMO_ADDRESS = "";
@@ -54,7 +55,7 @@ describe("test_live_mode_not_fixture_fallback", () => {
 
     // Demo mode: isDeployed false → fixture fallback shown with banner
     expect(isDeployed(DEMO_ADDRESS)).toBe(false);
-    // Live mode: isDeployed true → fixture fallback NOT shown; not-found shown instead
+    // Live mode: isDeployed true means fixture fallback is not selected.
     expect(isDeployed(LIVE_ADDRESS)).toBe(true);
   });
 });

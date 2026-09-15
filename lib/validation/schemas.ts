@@ -28,13 +28,13 @@ export const registerProjectSchema = z
     frontendUrl: httpsUrlSchema,
     releaseUrl: httpsUrlSchema,
     incidentUrl: httpsUrlSchema,
-    expectedAddress: z.string().min(1).max(256),
+    expectedAddress: z.string().max(256),
     checkCooldownSeconds: z.number().int().min(300).max(86_400),
     staleReleasePolicy: z.enum(["RESTRICTED", "RECOVERY_PENDING"]),
     unavailablePolicy: z.enum(["RESTRICTED", "RECOVERY_PENDING"]),
   })
   .superRefine((data, ctx) => {
-    const urls = [data.frontendUrl, data.releaseUrl, data.incidentUrl];
+    const urls = [data.frontendUrl, data.releaseUrl, data.incidentUrl].map((url) => validatePublicUrl(url));
     if (new Set(urls).size !== urls.length) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

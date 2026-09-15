@@ -58,3 +58,19 @@ export async function submitExecuteLowRisk(
     args: [actionHash] });
   return tx as unknown as string;
 }
+
+export async function submitTryExecuteHighRiskOrRecordRefusal(
+  walletAddress: `0x${string}`,
+  provider: Eip1193Provider,
+  actionHash: string,
+): Promise<string> {
+  const address = requireDeployed();
+  const client = createWriteClient(walletAddress, provider);
+  const tx = await client.writeContract({
+    address,
+    functionName: "try_execute_high_risk_or_record_refusal",
+    value: 0n,
+    args: [actionHash],
+  });
+  return tx as unknown as string;
+}

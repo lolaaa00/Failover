@@ -21,6 +21,7 @@ scripts/contract_static_checks.py for the enforced denylist).
 """
 
 from genlayer import *
+import hashlib
 import json
 import re
 
@@ -35,6 +36,11 @@ MAX_EXCERPT_LENGTH = 600
 MAX_EVIDENCE_ITEMS = 8
 MAX_FETCH_BYTES = 20000
 MIN_CHECK_COOLDOWN_SECONDS = 300  # 5 minutes, sealed minimum
+MAX_PROJECT_ID_LENGTH = 64
+MAX_PROJECTS = 5000
+MAX_USED_URLS_PER_PROJECT = 64
+MAX_HISTORY_ENTRIES = 100
+REQUIRED_SOURCE_ROLES = ("frontend", "release", "incident")
 
 FINDINGS = (
     "CLEAN",
@@ -64,7 +70,7 @@ ADDRESS_RELATION_VALUES = ("MATCH", "MISMATCH", "NOT_VISIBLE", "UNCLEAR")
 
 _PRIVATE_HOST_PATTERNS = (
     "localhost",
-    "127.0.0.1",
+    "127.",
     "0.0.0.0",
     "::1",
     "10.",
@@ -75,6 +81,8 @@ _PRIVATE_HOST_PATTERNS = (
 _PRIVATE_10_RE = re.compile(r"^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$")
 _PRIVATE_172_RE = re.compile(r"^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$")
 _PRIVATE_192_RE = re.compile(r"^192\.168\.\d{1,3}\.\d{1,3}$")
+_IPV4_RE = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
+_PROJECT_ID_RE = re.compile(r"^[a-z0-9-]{3,64}$")
 _URL_RE = re.compile(
     r"^https://"
     r"(?P<userinfo>[^/@]+@)?"
@@ -83,6 +91,29 @@ _URL_RE = re.compile(
     r"(?P<path>/[^\s#]*)?"
     r"(?P<frag>#.*)?$"
 )
+
+
+def _is_ipv4_literal(host: str) -> bool:
+    if not _IPV4_RE.match(host):
+        return False
+    parts = host.split(".")
+    for part in parts:
+        if int(part) > 255:
+            return False
+    return True
+
+
+def _validate_project_id(project_id: str) -> None:
+    if not isinstance(project_id, str) or not _PROJECT_ID_RE.match(project_id):
+        raise ValueError("invalid project_id")
+
+
+def _source_is_available(content) -> bool:
+    return isinstance(content, str) and len(content.strip()) > 0
+
+
+def _sha256_hex(text: str) -> str:
+    return hashlib.sha256(str(text).encode("utf-8")).hexdigest()
 
 
 def canonicalize_url(raw_url: str) -> str:
@@ -95,6 +126,7 @@ def canonicalize_url(raw_url: str) -> str:
     if not m:
         raise ValueError("url must be https:// and well-formed")
     host = m.group("host").lower()
+    _validate_host(host)
     port = m.group("port")
     path = m.group("path") or "/"
     if port in ("443", None):
@@ -106,6 +138,27 @@ def canonicalize_url(raw_url: str) -> str:
     return f"https://{host}{port_part}{path}"
 
 
+def _validate_host(host: str) -> None:
+    if not host or len(host) > 253:
+        raise ValueError("url host is invalid")
+    if host.startswith("[") or ":" in host:
+        raise ValueError("url must not use IP literals")
+    if _is_ipv4_literal(host):
+        raise ValueError("url must not use IP literals")
+    if "." not in host:
+        raise ValueError("url host must be a fully qualified domain")
+    if ".." in host:
+        raise ValueError("url host is invalid")
+    labels = host.split(".")
+    for label in labels:
+        if not label or len(label) > 63:
+            raise ValueError("url host is invalid")
+        if label.startswith("-") or label.endswith("-"):
+            raise ValueError("url host is invalid")
+        if not re.match(r"^[a-z0-9-]+$", label):
+            raise ValueError("url host is invalid")
+
+
 def validate_public_url(raw_url: str) -> str:
     """Web-evidence hardening (spec section 5, generic rules):
     - https only
@@ -114,7 +167,7 @@ def validate_public_url(raw_url: str) -> str:
     - reject fragments that would affect identity
     - reject localhost / private / loopback targets
     - reject IPv6 literals
-    - restrict to standard web ports (443 or 80)
+    - restrict to the HTTPS default port (443)
     - canonicalize host/path
 
     Returns the canonicalized URL or raises ValueError.
@@ -133,19 +186,15 @@ def validate_public_url(raw_url: str) -> str:
     if m.group("frag"):
         raise ValueError("url must not carry an identity-affecting fragment")
     host = m.group("host").lower()
-    # Reject IPv6 literals (e.g. [::1])
-    if host.startswith("["):
-        raise ValueError("url must not use IPv6 literals")
+    _validate_host(host)
     for pat in _PRIVATE_HOST_PATTERNS:
         if host == pat or host.startswith(pat):
             raise ValueError("url resolves to a private/localhost target")
     if _PRIVATE_10_RE.match(host) or _PRIVATE_172_RE.match(host) or _PRIVATE_192_RE.match(host):
         raise ValueError("url resolves to a private network target")
-    if "." not in host:
-        raise ValueError("url host must be a fully qualified domain")
     port = m.group("port")
-    if port is not None and port not in ("443", "80"):
-        raise ValueError("url must use standard web port (443 or 80)")
+    if port is not None and port != "443":
+        raise ValueError("url must use https standard port 443")
     return canonicalize_url(raw_url)
 
 
@@ -204,6 +253,32 @@ def validate_finding_shape(candidate: dict) -> bool:
             return False
         if len(item["excerpt"]) > MAX_EXCERPT_LENGTH:
             return False
+    evaluated = candidate.get("evaluated_sources", [])
+    if evaluated:
+        if not isinstance(evaluated, list) or len(evaluated) != len(REQUIRED_SOURCE_ROLES):
+            return False
+        seen = set()
+        for item in evaluated:
+            if not isinstance(item, dict):
+                return False
+            if item.get("source") not in REQUIRED_SOURCE_ROLES:
+                return False
+            if item.get("source") in seen:
+                return False
+            seen.add(item.get("source"))
+            if not isinstance(item.get("url"), str) or len(item.get("url")) > MAX_URL_LENGTH:
+                return False
+            digest = item.get("evaluated_sha256")
+            if not isinstance(digest, str) or not re.match(r"^[0-9a-f]{64}$", digest):
+                return False
+            if not isinstance(item.get("evaluated_length"), int) or item.get("evaluated_length") < 0:
+                return False
+            if not isinstance(item.get("available"), bool):
+                return False
+    evidence_digest = candidate.get("evidence_digest")
+    if evidence_digest is not None:
+        if not isinstance(evidence_digest, str) or not re.match(r"^[0-9a-f]{64}$", evidence_digest):
+            return False
     reason = candidate["reason"]
     if not isinstance(reason, str) or len(reason) > MAX_DESC_LENGTH:
         return False
@@ -226,27 +301,43 @@ def material_fields_match(a: dict, b: dict) -> bool:
     for k in material_keys:
         if a.get(k) != b.get(k):
             return False
-    # At least one evidence excerpt must be grounded (non-empty) unless the
-    # finding is UNAVAILABLE, where sources could not be fetched at all.
-    if a["finding"] != "UNAVAILABLE":
-        if not any(item.get("excerpt") for item in a.get("evidence", [])):
+    if _canonical_evidence(a) != _canonical_evidence(b):
+        return False
+    if a.get("evaluated_sources") and b.get("evaluated_sources"):
+        if _canonical_sources(a) != _canonical_sources(b):
             return False
-    # For COMPROMISED/IMPERSONATED, ALL evidence items must have non-empty excerpts.
-    if a["finding"] in ("COMPROMISED", "IMPERSONATED"):
-        for item in a.get("evidence", []):
-            if not item.get("excerpt"):
-                return False
-    # Validate source roles in evidence
-    valid_source_roles = {"frontend", "release", "incident"}
-    for item in a.get("evidence", []):
-        if item.get("source") not in valid_source_roles:
+    if a.get("evidence_digest") and b.get("evidence_digest"):
+        if a.get("evidence_digest") != b.get("evidence_digest"):
             return False
-    # The set of source roles with non-empty excerpts must match between leader and validator.
-    a_roles = {item["source"] for item in a.get("evidence", []) if item.get("excerpt")}
-    b_roles = {item["source"] for item in b.get("evidence", []) if item.get("excerpt")}
-    if a_roles != b_roles:
+    if a["finding"] != "UNAVAILABLE" and not any(item.get("excerpt") for item in a.get("evidence", [])):
         return False
     return True
+
+
+def _canonical_evidence(candidate: dict) -> list:
+    evidence = []
+    for item in candidate.get("evidence", []):
+        evidence.append([item.get("source"), item.get("excerpt", "")])
+    return sorted(evidence)
+
+
+def _canonical_sources(candidate: dict) -> list:
+    sources = []
+    for item in candidate.get("evaluated_sources", []):
+        sources.append(
+            [
+                item.get("source"),
+                item.get("url"),
+                item.get("evaluated_sha256"),
+                int(item.get("evaluated_length", 0)),
+                bool(item.get("available")),
+            ]
+        )
+    return sorted(sources)
+
+
+def _evidence_digest(candidate: dict) -> str:
+    return _sha256_hex(json.dumps(_canonical_evidence(candidate), separators=(",", ":")))
 
 
 def _verify_excerpts_grounded(leader_candidate: dict, validator_fetched: dict) -> bool:
@@ -271,6 +362,58 @@ def _verify_source_coverage_matches(leader_candidate: dict, validator_candidate:
     return leader_roles == validator_roles
 
 
+def _has_required_evidence(candidate: dict) -> bool:
+    roles = {item["source"] for item in candidate.get("evidence", []) if item.get("excerpt")}
+    return set(REQUIRED_SOURCE_ROLES).issubset(roles)
+
+
+def _source_commitments(project: dict, fetched: dict) -> list:
+    urls = {
+        "frontend": project["frontend_url"],
+        "release": project["release_url"],
+        "incident": project["incident_url"],
+    }
+    commitments = []
+    for role in REQUIRED_SOURCE_ROLES:
+        content = fetched.get(role)
+        bounded = content if isinstance(content, str) else ""
+        commitments.append(
+            {
+                "source": role,
+                "url": urls[role],
+                "evaluated_sha256": _sha256_hex(bounded),
+                "evaluated_length": len(bounded),
+                "available": _source_is_available(content),
+            }
+        )
+    return commitments
+
+
+def _safe_status_from_finding(project: dict, finding_result: dict) -> str:
+    if finding_result.get("finding") != "CLEAN":
+        return map_finding_to_status(
+            finding_result,
+            None,
+            project["stale_release_policy"],
+            project["unavailable_policy"],
+        )
+
+    address_required = bool(project.get("expected_address"))
+    expected_relation_ok = (
+        finding_result.get("expected_address_relation") == "MATCH"
+        if address_required
+        else finding_result.get("expected_address_relation") == "NOT_VISIBLE"
+    )
+    all_positive = (
+        finding_result.get("frontend_identity") == "MATCH"
+        and finding_result.get("release_relation") == "CURRENT"
+        and finding_result.get("incident_state") in ("NONE", "RESOLVED")
+        and expected_relation_ok
+        and _has_required_evidence(finding_result)
+    )
+    return "SAFE" if all_positive else "RESTRICTED"
+
+
 def map_finding_to_status(
     finding_or_dict,
     incident_state: str = None,
@@ -283,13 +426,23 @@ def map_finding_to_status(
     finding dict. When a full dict is passed, CLEAN is only mapped to SAFE if
     ALL of the following are positive: frontend_identity==MATCH,
     release_relation==CURRENT, incident_state in (NONE, RESOLVED),
-    expected_address_relation in (MATCH, NOT_VISIBLE). Any deviation degrades
-    to RESTRICTED or INCONCLUSIVE even if the top-level finding is CLEAN.
+    expected_address_relation in (MATCH, NOT_VISIBLE), and all three source
+    roles have grounded evidence. Any deviation degrades to RESTRICTED or
+    INCONCLUSIVE even if the top-level finding is CLEAN.
 
     stale_release_policy / unavailable_policy come from the project's sealed
     recovery policy chosen at registration time (immutable after activation),
     so the mapping itself stays a pure deterministic function of on-chain
     inputs — never an owner override at check time.
+
+    NOTE: the contract's actual SAFE decision for a live check goes through
+    `_safe_status_from_finding`, which additionally knows the project's
+    expected_address policy (REQUIRED vs ABSENT_ALLOWED) -- context this
+    function is never given -- so a REQUIRED address needing an exact MATCH
+    (not merely NOT_VISIBLE) is enforced there, not here. This CLEAN branch
+    exists so the function's dict-aware mapping stays complete and testable
+    in isolation; keep it in sync with `_safe_status_from_finding` rather
+    than letting the two drift.
     """
     # Support both full-dict and bare-string callers.
     if isinstance(finding_or_dict, dict):
@@ -314,6 +467,7 @@ def map_finding_to_status(
                 and rr == "CURRENT"
                 and is_ in ("NONE", "RESOLVED")
                 and ear in ("MATCH", "NOT_VISIBLE")
+                and _has_required_evidence(finding_or_dict)
             )
             if not all_positive:
                 return "RESTRICTED"
@@ -398,9 +552,9 @@ class FailoverRegistry(gl.Contract):
         history = json.loads(raw) if raw else []
         history.append(record)
         # Cap history to last 100 entries to bound storage growth.
-        if len(history) >= 100:
+        if len(history) > MAX_HISTORY_ENTRIES:
             count = len(history)
-            history = history[-99:]
+            history = history[-(MAX_HISTORY_ENTRIES - 1):]
             now = record.get("at", 0)
             history.insert(0, {"type": "TRUNCATED", "at": now, "count": count})
         self.check_history[project_id] = json.dumps(history)
@@ -426,10 +580,14 @@ class FailoverRegistry(gl.Contract):
         stale_release_policy: str,
         unavailable_policy: str,
     ) -> None:
+        try:
+            _validate_project_id(project_id)
+        except ValueError:
+            raise Exception("invalid project_id")
         if project_id in self.projects:
             raise Exception("project_id already exists")
-        if not project_id or len(project_id) > 64:
-            raise Exception("invalid project_id")
+        if len(self.project_ids_index) >= MAX_PROJECTS:
+            raise Exception("project index limit reached")
         if not name or len(name) > MAX_NAME_LENGTH:
             raise Exception("invalid name")
         if check_cooldown_seconds < MIN_CHECK_COOLDOWN_SECONDS:
@@ -450,6 +608,8 @@ class FailoverRegistry(gl.Contract):
 
         used_raw = self.used_urls.get(project_id)
         used = json.loads(used_raw) if used_raw else []
+        if len(used) + len(urls) > MAX_USED_URLS_PER_PROJECT:
+            raise Exception("used URL history limit reached")
         for u in urls:
             if u in used:
                 raise Exception("duplicate URL already used for this project")
@@ -465,7 +625,8 @@ class FailoverRegistry(gl.Contract):
             "release_url": release_c,
             "incident_url": incident_c,
             "source_domains": domains,
-            "expected_address": expected_address[:256],
+            "expected_address": (expected_address or "")[:256],
+            "expected_address_policy": "REQUIRED" if expected_address else "ABSENT_ALLOWED",
             "check_cooldown_seconds": check_cooldown_seconds,
             "stale_release_policy": stale_release_policy,
             "unavailable_policy": unavailable_policy,
@@ -506,6 +667,8 @@ class FailoverRegistry(gl.Contract):
             if new_c in used and new_c != old_url:
                 raise Exception("duplicate URL already used for this project")
             if new_c != old_url:
+                if len(used) + 1 > MAX_USED_URLS_PER_PROJECT:
+                    raise Exception("used URL history limit reached")
                 used.append(new_c)
             return new_c
 
@@ -522,6 +685,7 @@ class FailoverRegistry(gl.Contract):
         project["source_domains"] = [canonical_domain(u) for u in urls]
         if expected_address is not None:
             project["expected_address"] = expected_address[:256]
+            project["expected_address_policy"] = "REQUIRED" if expected_address else "ABSENT_ALLOWED"
 
         self.used_urls[project_id] = json.dumps(used)
         self._save_project(project_id, project)
@@ -586,10 +750,9 @@ class FailoverRegistry(gl.Contract):
         classify the fetched, bounded evidence into the structured schema
         from spec section 7, then validate + re-bound the shape before it
         ever becomes a candidate result."""
-        any_unavailable = any(v is None for v in fetched.values())
-        all_unavailable = all(v is None for v in fetched.values())
+        any_unavailable = any(not _source_is_available(v) for v in fetched.values())
 
-        if all_unavailable:
+        if any_unavailable:
             return {
                 "finding": "UNAVAILABLE",
                 "frontend_identity": "UNCLEAR",
@@ -597,7 +760,9 @@ class FailoverRegistry(gl.Contract):
                 "incident_state": "UNCLEAR",
                 "expected_address_relation": "UNCLEAR",
                 "evidence": [],
-                "reason": "all declared sources were unreachable at check time",
+                "reason": "one or more declared sources were unavailable or empty at check time",
+                "evaluated_sources": _source_commitments(project, fetched),
+                "evidence_digest": _evidence_digest({"evidence": []}),
             }
 
         prompt = (
@@ -677,13 +842,8 @@ class FailoverRegistry(gl.Contract):
                 "reason": "model output failed schema validation",
             }
 
-        if any_unavailable and not all_unavailable and candidate["finding"] == "COMPROMISED":
-            # A partially unavailable source set can never alone justify
-            # COMPROMISED without grounded excerpts (enforced again here
-            # defensively even though the prompt already instructs this).
-            has_excerpt = any(item.get("excerpt") for item in candidate.get("evidence", []))
-            if not has_excerpt:
-                candidate["finding"] = "INCONCLUSIVE"
+        candidate["evaluated_sources"] = _source_commitments(project, fetched)
+        candidate["evidence_digest"] = _evidence_digest(candidate)
 
         return candidate
 
@@ -743,12 +903,7 @@ class FailoverRegistry(gl.Contract):
         else:
             finding_result = result
 
-        new_status = map_finding_to_status(
-            finding_result,
-            None,
-            project["stale_release_policy"],
-            project["unavailable_policy"],
-        )
+        new_status = _safe_status_from_finding(project, finding_result)
 
         # Recovery-in-progress projects require the recovery flow, not a
         # plain check, to move back to SAFE/RECOVERED.
@@ -768,6 +923,8 @@ class FailoverRegistry(gl.Contract):
                 "previous_status": previous_status,
                 "new_status": new_status,
                 "finding": finding_result,
+                "evaluated_sources": finding_result.get("evaluated_sources", []),
+                "evidence_digest": finding_result.get("evidence_digest"),
                 "version": project["version"],
             },
         )
@@ -799,6 +956,13 @@ class FailoverRegistry(gl.Contract):
         new_frontend_c = None
         if new_frontend_url:
             new_frontend_c = validate_public_url(new_frontend_url)
+        proposed_urls = [new_release_c]
+        if new_frontend_c:
+            proposed_urls.append(new_frontend_c)
+        if len(set(proposed_urls)) != len(proposed_urls):
+            raise Exception("duplicate URL across recovery fields")
+        if len(used) + len(proposed_urls) > MAX_USED_URLS_PER_PROJECT:
+            raise Exception("used URL history limit reached")
 
         # New version required — cannot silently re-use the very URL that
         # was implicated (owner cannot "click unpause" by resubmitting the
@@ -808,6 +972,8 @@ class FailoverRegistry(gl.Contract):
         # Also reject URLs used in any previous recovery attempt.
         if new_release_c in used:
             raise Exception("recovery URL was already used in a prior attempt")
+        if new_frontend_c and new_frontend_c in used and new_frontend_c != project["frontend_url"]:
+            raise Exception("recovery frontend URL was already used in a prior attempt")
 
         used.append(new_release_c)
         if new_frontend_c:
@@ -824,6 +990,9 @@ class FailoverRegistry(gl.Contract):
             canonical_domain(project["release_url"]),
             canonical_domain(project["incident_url"]),
         ]
+        urls = [project["frontend_url"], project["release_url"], project["incident_url"]]
+        if len(set(urls)) != 3:
+            raise Exception("duplicate URL across roles")
         project["version"] = int(project["version"]) + 1
         project["status"] = "RECOVERY_PENDING"
         project["recovery_pending"] = True
@@ -895,6 +1064,7 @@ class FailoverRegistry(gl.Contract):
             and finding_result["release_relation"] == "CURRENT"
             and finding_result["incident_state"] in ("NONE", "RESOLVED")
             and finding_result["expected_address_relation"] in ("MATCH", "NOT_VISIBLE")
+            and _has_required_evidence(finding_result)
         )
 
         project["status"] = "RECOVERED" if recovered else "RECOVERY_PENDING"
@@ -911,6 +1081,8 @@ class FailoverRegistry(gl.Contract):
                 "at": now,
                 "result": "RECOVERED" if recovered else "RECOVERY_PENDING",
                 "finding": finding_result,
+                "evaluated_sources": finding_result.get("evaluated_sources", []),
+                "evidence_digest": finding_result.get("evidence_digest"),
                 "version": project["version"],
             },
         )

@@ -11,9 +11,11 @@
 
 export const MAX_URL_LENGTH = 512;
 
-const PRIVATE_HOST_PREFIXES = ["localhost", "127.0.0.1", "0.0.0.0", "::1", "10.", "192.168.", "169.254."];
+const PRIVATE_HOST_PREFIXES = ["localhost", "127.", "0.0.0.0", "::1", "10.", "192.168.", "169.254."];
 
 const PRIVATE_172_RE = /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/;
+const IPV4_RE = /^(\d{1,3}\.){3}\d{1,3}$/;
+const HOST_LABEL_RE = /^[a-z0-9-]+$/;
 
 export class UrlValidationError extends Error {}
 
@@ -32,12 +34,38 @@ function parseUrlStrict(raw: string): URL {
 export function canonicalizeUrl(raw: string): string {
   const url = parseUrlStrict(raw);
   const host = url.hostname.toLowerCase();
+  validateHost(host);
   const port = url.port && url.port !== "443" ? `:${url.port}` : "";
   let path = url.pathname || "/";
   if (path.length > 1 && path.endsWith("/")) {
     path = path.slice(0, -1);
   }
   return `https://${host}${port}${path}`;
+}
+
+function isIpv4Literal(host: string): boolean {
+  if (!IPV4_RE.test(host)) return false;
+  return host.split(".").every((part) => Number(part) <= 255);
+}
+
+function validateHost(host: string): void {
+  if (!host || host.length > 253) {
+    throw new UrlValidationError("URL host is invalid");
+  }
+  if (host.includes(":") || isIpv4Literal(host)) {
+    throw new UrlValidationError("URL must not use IP literals");
+  }
+  if (!host.includes(".")) {
+    throw new UrlValidationError("URL host must be a fully qualified domain");
+  }
+  if (host.includes("..")) {
+    throw new UrlValidationError("URL host is invalid");
+  }
+  for (const label of host.split(".")) {
+    if (!label || label.length > 63 || label.startsWith("-") || label.endsWith("-") || !HOST_LABEL_RE.test(label)) {
+      throw new UrlValidationError("URL host is invalid");
+    }
+  }
 }
 
 export function validatePublicUrl(raw: string): string {
@@ -61,9 +89,7 @@ export function validatePublicUrl(raw: string): string {
   }
 
   const host = url.hostname.toLowerCase();
-  if (!host.includes(".")) {
-    throw new UrlValidationError("URL host must be a fully qualified domain");
-  }
+  validateHost(host);
   for (const prefix of PRIVATE_HOST_PREFIXES) {
     if (host === prefix || host.startsWith(prefix)) {
       throw new UrlValidationError("URL resolves to a private/localhost target");
@@ -71,6 +97,9 @@ export function validatePublicUrl(raw: string): string {
   }
   if (PRIVATE_172_RE.test(host)) {
     throw new UrlValidationError("URL resolves to a private network target");
+  }
+  if (url.port && url.port !== "443") {
+    throw new UrlValidationError("URL must use https standard port 443");
   }
 
   return canonicalizeUrl(raw);

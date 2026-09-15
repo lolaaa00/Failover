@@ -14,5 +14,5 @@ export const FAILOVER_GATE_ADDRESS = (process.env.NEXT_PUBLIC_FAILOVER_GATE_ADDR
   | "";
 
 export function isDeployed(address: string): address is `0x${string}` {
-  return address.startsWith("0x") && address.length === 42;
+  return /^0x[0-9a-fA-F]{40}$/.test(address);
 }

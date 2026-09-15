@@ -1,10 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useWallet, isWriteReady } from "@/lib/wallet/WalletProvider";
 import { NetworkGuard } from "@/components/wallet/NetworkGuard";
 import { TxLifecyclePanel } from "@/components/tx/TxLifecyclePanel";
 import { useTxLifecycle } from "@/lib/contract/txLifecycle";
+import { createFinalityStep } from "@/lib/contract/finality";
 import { registerProjectSchema, type RegisterProjectInput } from "@/lib/validation/schemas";
 import { submitRegisterProject, readProject } from "@/lib/contract/registryAdapter";
 import { isDeployed, FAILOVER_REGISTRY_ADDRESS } from "@/lib/contract/addresses";
@@ -25,6 +27,7 @@ export default function RegisterProjectPage() {
   const wallet = useWallet();
   const [form, setForm] = useState<RegisterProjectInput>(EMPTY);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [registeredProjectId, setRegisteredProjectId] = useState<string | null>(null);
   const { state, run } = useTxLifecycle<{ status: "ok" }>();
 
   function update<K extends keyof RegisterProjectInput>(key: K, value: RegisterProjectInput[K]) {
@@ -45,6 +48,8 @@ export default function RegisterProjectPage() {
     setFieldErrors({});
     if (!isWriteReady(wallet) || !wallet.address || !wallet.provider) return;
 
+    setRegisteredProjectId(null);
+    const finality = createFinalityStep();
     await run({
       submit: () =>
         submitRegisterProject(wallet.address as `0x${string}`, wallet.provider!, {
@@ -58,11 +63,16 @@ export default function RegisterProjectPage() {
           staleReleasePolicy: parsed.data.staleReleasePolicy,
           unavailablePolicy: parsed.data.unavailablePolicy,
         }),
-      waitForFinality: async () => ({ status: "FINALIZED" }),
-      readExecutionResult: async () => ({ status: "ok" as const }),
+      waitForFinality: finality.waitForFinality,
+      readExecutionResult: async () => {
+        finality.assertExecutionSucceeded();
+        return { status: "ok" as const };
+      },
       rereadAndValidate: async () => {
         const project = await readProject(parsed.data.projectId);
-        return project.status === "DRAFT";
+        const ok = project.status === "DRAFT";
+        if (ok) setRegisteredProjectId(parsed.data.projectId);
+        return ok;
       },
     });
   }
@@ -121,7 +131,7 @@ export default function RegisterProjectPage() {
             placeholder="https://status.example.com/"
           />
         </Field>
-        <Field label="Expected Address / Action Descriptor" error={fieldErrors.expectedAddress}>
+        <Field label="Expected Address / Action Descriptor (optional)" error={fieldErrors.expectedAddress}>
           <input
             value={form.expectedAddress}
             onChange={(e) => update("expectedAddress", e.target.value)}
@@ -170,6 +180,23 @@ export default function RegisterProjectPage() {
       </form>
 
       <TxLifecyclePanel state={state} />
+
+      {state.phase === "STATE_REREAD" && registeredProjectId && (
+        <div className="checksum-plate p-5 border-avionics-blue/50 space-y-3">
+          <p className="font-mono-label text-xs uppercase text-avionics-blue">Registered — status DRAFT</p>
+          <p className="text-sm text-cockpit-white/60">
+            The project is registered but the gate stays closed until it is activated. Activation is a
+            separate owner-signed write (spec section 4) so URLs can be reviewed once more before the
+            fields freeze.
+          </p>
+          <Link
+            href={`/p/${registeredProjectId}`}
+            className="inline-block font-mono-label text-xs uppercase px-4 py-3 bg-avionics-blue text-panel-black font-semibold"
+          >
+            Open dossier to activate →
+          </Link>
+        </div>
+      )}
 
       <style jsx global>{`
         .input {

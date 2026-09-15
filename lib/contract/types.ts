@@ -1,5 +1,6 @@
 export type ProjectStatus =
   | "DRAFT"
+  | "PENDING_FIRST_CHECK"
   | "SAFE"
   | "CHECKING"
   | "RESTRICTED"
@@ -26,6 +27,14 @@ export interface EvidenceItem {
   excerpt: string;
 }
 
+export interface EvaluatedSource {
+  source: "frontend" | "release" | "incident";
+  url: string;
+  evaluated_sha256: string;
+  evaluated_length: number;
+  available: boolean;
+}
+
 export interface StructuredFinding {
   finding: SafetyFinding;
   frontend_identity: FrontendIdentity;
@@ -34,6 +43,8 @@ export interface StructuredFinding {
   expected_address_relation: AddressRelation;
   evidence: EvidenceItem[];
   reason: string;
+  evaluated_sources?: EvaluatedSource[];
+  evidence_digest?: string;
 }
 
 export interface ProjectRecord {
@@ -46,6 +57,7 @@ export interface ProjectRecord {
   incident_url: string;
   source_domains: string[];
   expected_address: string;
+  expected_address_policy?: "REQUIRED" | "ABSENT_ALLOWED";
   check_cooldown_seconds: number;
   stale_release_policy: "RESTRICTED" | "RECOVERY_PENDING";
   unavailable_policy: "RESTRICTED" | "RECOVERY_PENDING";

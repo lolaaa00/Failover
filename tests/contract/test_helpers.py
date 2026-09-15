@@ -43,9 +43,12 @@ def test_validate_public_url_rejects_localhost_and_private_ips():
     for bad in [
         "https://localhost/app",
         "https://127.0.0.1/app",
+        "https://127.0.0.2/app",
         "https://10.0.0.5/app",
+        "https://172.16.0.5/app",
         "https://192.168.1.5/app",
         "https://169.254.1.1/app",
+        "https://8.8.8.8/app",
     ]:
         try:
             reg.validate_public_url(bad)
@@ -65,6 +68,22 @@ def test_validate_public_url_rejects_credentials_and_fragment():
         assert False
     except ValueError:
         pass
+
+
+def test_validate_public_url_rejects_bad_host_and_port_edges():
+    for bad in [
+        "https://example.com:80/app",
+        "https://example.com:8443/app",
+        "https://bad_host.example.com/app",
+        "https://-bad.example.com/app",
+        "https://bad-.example.com/app",
+        "https://example..com/app",
+    ]:
+        try:
+            reg.validate_public_url(bad)
+            assert False, f"expected rejection for {bad}"
+        except ValueError:
+            pass
 
 
 def test_validate_public_url_rejects_over_length():
@@ -110,7 +129,11 @@ def _good_candidate(**overrides):
         "release_relation": "CURRENT",
         "incident_state": "NONE",
         "expected_address_relation": "MATCH",
-        "evidence": [{"source": "frontend", "excerpt": "hello"}],
+        "evidence": [
+            {"source": "frontend", "excerpt": "official app"},
+            {"source": "release", "excerpt": "current release"},
+            {"source": "incident", "excerpt": "no incidents"},
+        ],
         "reason": "looks fine",
     }
     base.update(overrides)
@@ -130,6 +153,20 @@ def test_material_fields_match_true_for_identical():
     a = _good_candidate()
     b = _good_candidate(reason="different prose but same material fields")
     assert reg.material_fields_match(a, b) is True
+
+
+def test_material_fields_match_rejects_changed_or_extra_evidence():
+    a = _good_candidate()
+    b = _good_candidate(
+        evidence=[
+            {"source": "frontend", "excerpt": "official app"},
+            {"source": "release", "excerpt": "different release"},
+            {"source": "incident", "excerpt": "no incidents"},
+        ]
+    )
+    assert reg.material_fields_match(a, b) is False
+    c = _good_candidate(evidence=_good_candidate()["evidence"] + [{"source": "frontend", "excerpt": "extra"}])
+    assert reg.material_fields_match(a, c) is False
 
 
 def test_material_fields_match_false_for_disagreement():
@@ -153,6 +190,44 @@ def test_material_fields_match_requires_grounded_excerpt_unless_unavailable():
 
 def test_map_finding_to_status_clean_is_safe():
     assert reg.map_finding_to_status("CLEAN", "NONE") == "SAFE"
+
+
+def test_map_finding_to_status_clean_dict_requires_full_evidence():
+    """The dict-aware CLEAN branch is not on the contract's live call path
+    for a CLEAN finding (_safe_status_from_finding never delegates CLEAN to
+    this function), but it is documented and unit-tested as a complete,
+    dict-aware mapping in its own right -- it must not silently accept a
+    CLEAN finding with incomplete source evidence just because this
+    function, unlike _safe_status_from_finding, was exercised in isolation."""
+    assert reg.map_finding_to_status(_good_candidate()) == "SAFE"
+    assert (
+        reg.map_finding_to_status(
+            _good_candidate(evidence=[{"source": "frontend", "excerpt": "official app"}])
+        )
+        == "RESTRICTED"
+    )
+
+
+def test_safe_status_requires_required_evidence_and_address_policy():
+    required_project = {
+        "expected_address": "0xabc",
+        "stale_release_policy": "RESTRICTED",
+        "unavailable_policy": "RESTRICTED",
+    }
+    optional_project = dict(required_project, expected_address="")
+    assert reg._safe_status_from_finding(required_project, _good_candidate()) == "SAFE"
+    assert reg._safe_status_from_finding(
+        required_project,
+        _good_candidate(expected_address_relation="NOT_VISIBLE"),
+    ) == "RESTRICTED"
+    assert reg._safe_status_from_finding(
+        optional_project,
+        _good_candidate(expected_address_relation="NOT_VISIBLE"),
+    ) == "SAFE"
+    assert reg._safe_status_from_finding(
+        required_project,
+        _good_candidate(evidence=[{"source": "frontend", "excerpt": "official app"}]),
+    ) == "RESTRICTED"
 
 
 def test_map_finding_to_status_compromised_and_impersonated_restrict():

@@ -177,4 +177,20 @@ export async function submitRunRecoveryCheck(
   return tx as unknown as string;
 }
 
+export async function submitMarkRecoveredSafe(
+  walletAddress: `0x${string}`,
+  provider: Eip1193Provider,
+  projectId: string,
+): Promise<string> {
+  const address = requireDeployed();
+  const client = createWriteClient(walletAddress, provider);
+  const tx = await client.writeContract({
+    address,
+    functionName: "mark_recovered_safe",
+    value: 0n,
+    args: [projectId],
+  });
+  return tx as unknown as string;
+}
+
 export type { ProjectRecord, ProjectStatus, SafetyFinding };
