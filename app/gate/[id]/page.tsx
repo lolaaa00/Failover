@@ -8,7 +8,9 @@ import { useTxLifecycle } from "@/lib/contract/txLifecycle";
 import { createFinalityStep } from "@/lib/contract/finality";
 import {
   readGateCounts,
+  readGateLinkedProject,
   readGateReceipts,
+  readGateRegistryAddress,
   readIsGateOpen,
   submitExecuteHighRisk,
   submitExecuteLowRisk,
@@ -32,6 +34,35 @@ function randomActionHash(): string {
  * mismatch. A durable receipt keyed to *this* action_hash is the precise,
  * concurrency-safe postcondition instead.
  */
+/**
+ * A deployed FailoverGate is immutably bound to exactly one
+ * (registry, project_id) pair at construction time (see
+ * contracts/FailoverGate.py). The route's `id` param is untrusted UI
+ * state -- it must never be assumed to be the project the deployed gate
+ * actually gates. This is the single source of truth for "is it safe to
+ * treat this gate as governing the requested route", checked against the
+ * gate's own authoritative, freshly re-read view methods every time.
+ */
+export function evaluateGateBinding(params: {
+  routeProjectId: string;
+  linkedProject: string;
+  gateRegistryAddress: string;
+  configuredRegistryAddress: string;
+}): { ok: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  if (params.linkedProject !== params.routeProjectId) {
+    reasons.push(
+      `Route project "${params.routeProjectId}" does not match the deployed gate's linked project "${params.linkedProject}".`,
+    );
+  }
+  if (params.gateRegistryAddress.toLowerCase() !== params.configuredRegistryAddress.toLowerCase()) {
+    reasons.push(
+      `The gate's bound registry (${params.gateRegistryAddress}) does not match the configured FailoverRegistry (${params.configuredRegistryAddress}).`,
+    );
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+
 export function findReceiptOutcome(receipts: unknown[], actionHash: string): string | null {
   for (let i = receipts.length - 1; i >= 0; i--) {
     const raw = receipts[i];
@@ -48,6 +79,11 @@ export function findReceiptOutcome(receipts: unknown[], actionHash: string): str
   return null;
 }
 
+type BindingStatus =
+  | { checked: false }
+  | { checked: true; ok: true }
+  | { checked: true; ok: false; reasons: string[] };
+
 export default function LiveGatePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const wallet = useWallet();
@@ -56,12 +92,40 @@ export default function LiveGatePage({ params }: { params: Promise<{ id: string 
   const [counts, setCounts] = useState<unknown>(null);
   const [receipts, setReceipts] = useState<unknown[]>([]);
   const [readError, setReadError] = useState<string | null>(null);
+  const [binding, setBinding] = useState<BindingStatus>({ checked: false });
 
   const liveDeployed = isDeployed(FAILOVER_GATE_ADDRESS) && isDeployed(FAILOVER_REGISTRY_ADDRESS);
+  const bindingOk = binding.checked && binding.ok;
 
   async function refresh() {
     if (!liveDeployed) return;
     try {
+      // Binding is re-read from the deployed gate's own view methods on
+      // every refresh -- never cached or trusted from local config -- so a
+      // gate that turns out to be bound to a different project/registry is
+      // caught even if this page was left open across a redeploy.
+      const [linkedProject, gateRegistryAddress] = await Promise.all([
+        readGateLinkedProject(),
+        readGateRegistryAddress(),
+      ]);
+      const result = evaluateGateBinding({
+        routeProjectId: id,
+        linkedProject,
+        gateRegistryAddress,
+        configuredRegistryAddress: FAILOVER_REGISTRY_ADDRESS,
+      });
+      setBinding(result.ok ? { checked: true, ok: true } : { checked: true, ok: false, reasons: result.reasons });
+      setReadError(null);
+
+      if (!result.ok) {
+        // Fail closed: do not read or display gate state as if it applies
+        // to this route when the binding itself is wrong.
+        setGateOpen(null);
+        setCounts(null);
+        setReceipts([]);
+        return;
+      }
+
       const [open, nextCounts, nextReceipts] = await Promise.all([
         readIsGateOpen(),
         readGateCounts(),
@@ -70,7 +134,6 @@ export default function LiveGatePage({ params }: { params: Promise<{ id: string 
       setGateOpen(open);
       setCounts(nextCounts);
       setReceipts(nextReceipts);
-      setReadError(null);
     } catch (err) {
       setReadError((err as Error)?.message ?? "Failed to read gate state");
     }
@@ -87,6 +150,10 @@ export default function LiveGatePage({ params }: { params: Promise<{ id: string 
 
   async function submit(kind: "high" | "try-high" | "low") {
     if (!isWriteReady(wallet) || !wallet.address || !wallet.provider) return;
+    // Defense in depth: the buttons are already hidden while the binding
+    // check hasn't passed, but never allow a write to reach the chain on
+    // the strength of a route param alone.
+    if (!bindingOk) return;
     const actionHash = randomActionHash();
     const finality = createFinalityStep();
     await run({
@@ -158,6 +225,28 @@ export default function LiveGatePage({ params }: { params: Promise<{ id: string 
           <Link href="/demo/gate" className="font-mono-label text-xs uppercase text-avionics-blue underline">
             Open fixture gate demo
           </Link>
+        </div>
+      ) : !binding.checked ? (
+        <div className="checksum-plate p-4">
+          <p className="font-mono-label text-xs uppercase text-cockpit-white/50">
+            Verifying gate binding against the deployed contract…
+          </p>
+          {readError && <p className="text-emergency-red font-mono-label text-xs mt-2">{readError}</p>}
+        </div>
+      ) : !binding.ok ? (
+        <div className="checksum-plate p-4 border-emergency-red/70 bg-emergency-red/10 space-y-2" role="alert">
+          <p className="font-mono-label text-xs uppercase text-emergency-red font-bold">
+            Gate Binding Mismatch — Refusing To Operate
+          </p>
+          <p className="text-sm text-cockpit-white/60">
+            The deployed FailoverGate is not bound to this route. Nothing below reflects this gate&rsquo;s real
+            state, and every write action is disabled — this is a fail-closed refusal, not an outage.
+          </p>
+          <ul className="list-disc list-inside text-sm text-cockpit-white/60 space-y-1">
+            {binding.reasons.map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
         </div>
       ) : (
         <>

@@ -35,6 +35,28 @@ export async function readGateReceipts(): Promise<unknown[]> {
   return (await client.readContract({ address, functionName: "get_receipts", args: [] })) as unknown[];
 }
 
+/**
+ * The project_id a deployed FailoverGate is immutably bound to. A gate's
+ * binding is set once at construction and can never be re-pointed, so this
+ * is the only authoritative source of "which project does this gate
+ * actually gate" -- a route param must never be trusted in its place.
+ */
+export async function readGateLinkedProject(): Promise<string> {
+  const address = requireDeployed();
+  const client = createReadClient();
+  return (await client.readContract({ address, functionName: "get_linked_project", args: [] })) as string;
+}
+
+/**
+ * The FailoverRegistry address a deployed FailoverGate reads is_safe()
+ * from, also immutable since construction.
+ */
+export async function readGateRegistryAddress(): Promise<string> {
+  const address = requireDeployed();
+  const client = createReadClient();
+  return (await client.readContract({ address, functionName: "get_registry_address", args: [] })) as string;
+}
+
 export async function submitExecuteHighRisk(
   walletAddress: `0x${string}`,
   provider: Eip1193Provider,
