@@ -21,6 +21,7 @@ scripts/contract_static_checks.py for the enforced denylist).
 """
 
 from genlayer import *
+from datetime import datetime, timezone
 import hashlib
 import json
 import re
@@ -560,8 +561,15 @@ class FailoverRegistry(gl.Contract):
         self.check_history[project_id] = json.dumps(history)
 
     def _tx_time(self) -> int:
-        # GenVM-deterministic transaction time (stable 61999 runtime).
-        return int(gl.message.timestamp)
+        # GenVM-deterministic transaction time. `gl.message` (MessageType)
+        # exposes only contract_address/sender_address/origin_address/value/
+        # chain_id on this runtime -- there is no numeric `timestamp` field.
+        # The deterministic transaction time is only available as an
+        # ISO-8601 string on `gl.message_raw['datetime']`; parse that.
+        dt = datetime.fromisoformat(gl.message_raw["datetime"])
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
 
     # ------------------------------------------------------------------
     # Registration (writes)

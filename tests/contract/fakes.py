@@ -18,6 +18,7 @@ Studionet behavior.
 import sys
 import types
 import json as _json
+from datetime import datetime, timezone
 
 
 class FakeAddress(str):
@@ -47,10 +48,69 @@ class Return:
         self.calldata = calldata
 
 
+class _Clock:
+    """Shared mutable deterministic-time source. The real GenVM MessageType
+    has no numeric timestamp field at all (see genlayer.gl.MessageType) --
+    only gl.message_raw['datetime'], an ISO-8601 string -- which is what
+    FailoverRegistry._tx_time() actually parses. This fake keeps a single
+    clock so `gl.message.timestamp += N` (used by tests to simulate the
+    passage of time past a cooldown) and gl.message_raw['datetime'] always
+    agree, rather than re-diverging from the real API surface again."""
+
+    def __init__(self, ts):
+        self._ts = ts
+
+    def get(self):
+        return self._ts
+
+    def set(self, ts):
+        self._ts = ts
+
+
 class _Message:
-    def __init__(self, sender_address="0xOWNER", timestamp=1_700_000_000):
+    """Mirrors genlayer.gl.MessageType's real fields (contract_address,
+    sender_address, origin_address, value, chain_id) plus a `timestamp`
+    convenience property for tests -- backed by the shared clock, not a
+    real MessageType attribute."""
+
+    def __init__(self, sender_address, clock: _Clock):
         self.sender_address = FakeAddress(sender_address)
-        self.timestamp = timestamp
+        self.origin_address = FakeAddress(sender_address)
+        self.contract_address = FakeAddress()
+        self.value = u256(0)
+        self.chain_id = u256(61999)
+        self._clock = clock
+
+    @property
+    def timestamp(self):
+        return self._clock.get()
+
+    @timestamp.setter
+    def timestamp(self, value):
+        self._clock.set(value)
+
+
+class _MessageRaw(dict):
+    """Mirrors genlayer._internal.msg.MessageRawType -- in particular the
+    `datetime` ISO-8601 string field FailoverRegistry._tx_time() actually
+    reads, derived live from the same shared clock as gl.message.timestamp."""
+
+    def __init__(self, sender_address, clock: _Clock):
+        super().__init__(
+            contract_address=FakeAddress(),
+            sender_address=FakeAddress(sender_address),
+            origin_address=FakeAddress(sender_address),
+            stack=[],
+            value=0,
+            is_init=False,
+            chain_id=61999,
+        )
+        self._clock = clock
+
+    def __getitem__(self, key):
+        if key == "datetime":
+            return datetime.fromtimestamp(self._clock.get(), tz=timezone.utc).isoformat()
+        return super().__getitem__(key)
 
 
 class _WebFetchQueue:
@@ -154,7 +214,9 @@ def make_fake_genlayer_module(sender_address="0xOWNER", timestamp=1_700_000_000)
     prompt_queue = _PromptQueue()
     vm = _VM()
     vm._web_queue = web_queue
-    message = _Message(sender_address, timestamp)
+    clock = _Clock(timestamp)
+    message = _Message(sender_address, clock)
+    message_raw = _MessageRaw(sender_address, clock)
     nondet = _Nondet(web_queue, prompt_queue)
 
     class _GlNamespace(types.SimpleNamespace):
@@ -163,6 +225,7 @@ def make_fake_genlayer_module(sender_address="0xOWNER", timestamp=1_700_000_000)
     gl = _GlNamespace()
     gl.vm = vm
     gl.message = message
+    gl.message_raw = message_raw
     gl.nondet = nondet
 
     def public_view(fn):
