@@ -52,7 +52,11 @@ class FailoverGate(gl.Contract):
     def __init__(self, registry_address: Address, project_id: str):
         if not project_id:
             raise Exception("project_id required")
-        self.registry_address = registry_address
+        # Deploy-time constructor args arrive deserialized as plain str, not
+        # already-constructed Address instances -- storage.Address setters
+        # require a real Address (they write via `.as_bytes`), so this must
+        # be wrapped explicitly rather than assigned as-is.
+        self.registry_address = Address(registry_address) if isinstance(registry_address, str) else registry_address
         self.project_id = project_id
         self.high_risk_count = u256(0)
         self.low_risk_count = u256(0)
