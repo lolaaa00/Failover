@@ -73,17 +73,28 @@ def _setup(sender="0xOWNER", ts=1_700_000_000):
 
 
 class _RegistryProxy:
-    """Adapts the real registry instance's `args=[...]` interface-style
-    calls used by FailoverGate (which calls self._registry().is_safe(args=[..]))."""
+    """Mirrors the real GenVM `_ContractAt` cross-contract call shape: view
+    methods are only reachable through `.view().method_name(*args)`, not
+    directly on the proxy -- calling the proxy's method name attribute
+    directly (as an earlier version of FailoverGate did) raises
+    AttributeError on the real Studionet runtime."""
 
     def __init__(self, registry):
         self._registry = registry
 
-    def is_safe(self, args):
-        return self._registry.is_safe(*args)
+    def view(self):
+        return _RegistryViewProxy(self._registry)
 
-    def get_status(self, args):
-        return self._registry.get_status(*args)
+
+class _RegistryViewProxy:
+    def __init__(self, registry):
+        self._registry = registry
+
+    def is_safe(self, project_id):
+        return self._registry.is_safe(project_id)
+
+    def get_status(self, project_id):
+        return self._registry.get_status(project_id)
 
 
 def _script_agreement(prompt_queue, finding, n=3):

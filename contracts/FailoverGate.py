@@ -108,7 +108,7 @@ class FailoverGate(gl.Contract):
         if self.executed_high_risk.get(action_hash, False):
             raise Exception("action_hash already executed (replay rejected)")
 
-        safe = self._registry().is_safe(args=[self.project_id])
+        safe = self._registry().view().is_safe(self.project_id)
         if not safe:
             # No state mutation before raise — writes would be lost on revert.
             raise Exception("gate refused: project is not currently SAFE/RECOVERED")
@@ -131,7 +131,7 @@ class FailoverGate(gl.Contract):
         if self.executed_high_risk.get(action_hash, False):
             raise Exception("action_hash already executed (replay rejected)")
 
-        safe = self._registry().is_safe(args=[self.project_id])
+        safe = self._registry().view().is_safe(self.project_id)
         if not safe:
             # Write refusal durably — this path does NOT raise, so writes persist.
             self.refused_count = u256(int(self.refused_count) + 1)
@@ -161,7 +161,7 @@ class FailoverGate(gl.Contract):
 
     @gl.public.view
     def is_gate_open(self) -> bool:
-        return self._registry().is_safe(args=[self.project_id])
+        return self._registry().view().is_safe(self.project_id)
 
     @gl.public.view
     def get_linked_project(self) -> str:
