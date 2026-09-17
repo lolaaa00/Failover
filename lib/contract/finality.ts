@@ -120,17 +120,40 @@ export async function waitForFinality(txHash: string): Promise<FinalityOutcome> 
  */
 export function assertExecutionSucceeded(receipt: GenLayerTransaction | undefined): void {
   if (!receipt) return;
-  if (receipt.txExecutionResultName === ExecutionResult.FINISHED_WITH_ERROR) {
+  // `txExecutionResultName` is the field genlayer-js's own types document,
+  // but real Studionet `fullTransaction: true` receipts leave it undefined
+  // even for a genuinely reverted call -- the only field actually populated
+  // is consensus_data.leader_receipt[].execution_result ("SUCCESS"/"ERROR").
+  // Check both so a revert is never mistaken for success on either shape.
+  if (receipt.txExecutionResultName === ExecutionResult.FINISHED_WITH_ERROR || leaderExecutionFailed(receipt)) {
     throw new Error(extractLeaderError(receipt) ?? "contract execution reverted");
   }
+}
+
+function leaderExecutionFailed(receipt: GenLayerTransaction): boolean {
+  const leaderReceipts = receipt.consensus_data?.leader_receipt;
+  if (!Array.isArray(leaderReceipts)) return false;
+  return leaderReceipts.some((entry) => (entry as { execution_result?: unknown } | undefined)?.execution_result === "ERROR");
 }
 
 function extractLeaderError(receipt: GenLayerTransaction): string | undefined {
   const leaderReceipts = receipt.consensus_data?.leader_receipt;
   if (!Array.isArray(leaderReceipts)) return undefined;
   for (const entry of leaderReceipts) {
-    const message = (entry as { error?: unknown } | undefined)?.error;
-    if (typeof message === "string" && message.length > 0) return message;
+    const record = entry as {
+      error?: unknown;
+      genvm_result?: { stderr?: unknown; error_description?: unknown } | null;
+    } | undefined;
+    // Prefer the documented `.error` field when present, but real receipts
+    // instead carry the message inside genvm_result (a Python traceback in
+    // `stderr`, or a short `error_description`).
+    if (typeof record?.error === "string" && record.error.length > 0) return record.error;
+    const stderr = record?.genvm_result?.stderr;
+    if (typeof stderr === "string" && stderr.trim().length > 0) {
+      return stderr.trim().split("\n").pop();
+    }
+    const description = record?.genvm_result?.error_description;
+    if (typeof description === "string" && description.length > 0) return description;
   }
   return undefined;
 }

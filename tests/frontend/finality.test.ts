@@ -103,6 +103,46 @@ describe("assertExecutionSucceeded", () => {
       assertExecutionSucceeded({ txExecutionResultName: "FINISHED_WITH_ERROR" } as never),
     ).toThrow(/contract execution reverted/);
   });
+
+  // Sanitized shape of a real Studionet `fullTransaction: true` receipt for
+  // a genuinely reverted call (register_project reverting on the since-fixed
+  // gl.message.timestamp bug). `txExecutionResultName` was undefined even
+  // though the call reverted -- only consensus_data.leader_receipt[]
+  // .execution_result ("ERROR") and the genvm_result.stderr traceback
+  // carried that information. A caller that only checked
+  // txExecutionResultName would have reported this finalized revert as a
+  // false success.
+  it("detects a real-shape Studionet revert where txExecutionResultName is undefined", () => {
+    expect(() =>
+      assertExecutionSucceeded({
+        statusName: "FINALIZED",
+        txExecutionResultName: undefined,
+        consensus_data: {
+          leader_receipt: [
+            {
+              execution_result: "ERROR",
+              genvm_result: {
+                stderr: "Traceback (most recent call last):\n...\nAttributeError: 'MessageType' object has no attribute 'timestamp'",
+                stdout: "",
+              },
+            },
+          ],
+        },
+      } as never),
+    ).toThrow("AttributeError: 'MessageType' object has no attribute 'timestamp'");
+  });
+
+  it("does not throw for a real-shape Studionet success where txExecutionResultName is undefined", () => {
+    expect(() =>
+      assertExecutionSucceeded({
+        statusName: "FINALIZED",
+        txExecutionResultName: undefined,
+        consensus_data: {
+          leader_receipt: [{ execution_result: "SUCCESS", genvm_result: { stderr: "", stdout: "" } }],
+        },
+      } as never),
+    ).not.toThrow();
+  });
 });
 
 describe("createFinalityStep", () => {
