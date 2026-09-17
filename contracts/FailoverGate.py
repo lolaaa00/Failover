@@ -10,9 +10,24 @@ rather than a blanket kill switch. Action hashes are replay-protected.
 """
 
 from genlayer import *
+from datetime import datetime, timezone
 import json
 
 MAX_ACTION_HASH_LENGTH = 128
+
+
+def tx_time() -> int:
+    # GenVM-deterministic transaction time. `gl.message` (MessageType) exposes
+    # only contract_address/sender_address/origin_address/value/chain_id on
+    # this runtime -- there is no numeric `timestamp` field. The deterministic
+    # transaction time is only available as an ISO-8601 string on
+    # `gl.message_raw['datetime']`; parse that. Mirrors
+    # FailoverRegistry._tx_time() so both contracts agree on how deterministic
+    # time is derived.
+    dt = datetime.fromisoformat(gl.message_raw["datetime"])
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
 
 
 def is_valid_action_hash(action_hash: str) -> bool:
@@ -72,7 +87,7 @@ class FailoverGate(gl.Contract):
                     "kind": kind,
                     "action_hash": action_hash,
                     "outcome": outcome,
-                    "at": int(gl.message.timestamp),
+                    "at": tx_time(),
                     "caller": str(gl.message.sender_address),
                 }
             )

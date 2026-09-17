@@ -222,6 +222,56 @@ def test_low_risk_always_executes():
     assert result == "EXECUTED"
 
 
+def _receipt_at(gate, index):
+    import json as _json
+
+    return _json.loads(gate.get_receipts()[index])
+
+
+def test_execute_high_risk_records_receipt_via_message_raw_datetime():
+    """execute_high_risk must record a receipt whose 'at' timestamp derives
+    from gl.message_raw['datetime'] (the only deterministic-time source the
+    real GenVM runtime exposes), not from gl.message.timestamp."""
+    registry, gate, gl, web_q, prompt_q = _setup(ts=1_700_000_500)
+    web_q.push_round({FRONTEND: FRONTEND_CONTENT_CLEAN, RELEASE: RELEASE_CONTENT_CLEAN, INCIDENT: INCIDENT_CONTENT_CLEAN})
+    _script_agreement(prompt_q, CLEAN_FINDING)
+    registry.run_safety_check("proj1")
+    assert registry.is_safe("proj1") is True
+
+    result = gate.execute_high_risk("0xdeadbeef21")
+    assert result == "EXECUTED"
+    receipt = _receipt_at(gate, -1)
+    assert receipt["kind"] == "high_risk"
+    assert receipt["outcome"] == "EXECUTED"
+    assert receipt["at"] == 1_700_000_500
+
+
+def test_execute_low_risk_records_receipt_via_message_raw_datetime():
+    """execute_low_risk must record a receipt whose 'at' timestamp derives
+    from gl.message_raw['datetime'], matching the same deterministic-time
+    source used by FailoverRegistry."""
+    registry, gate, gl, web_q, prompt_q = _setup(ts=1_700_000_600)
+    result = gate.execute_low_risk("0xdeadbeef22")
+    assert result == "EXECUTED"
+    receipt = _receipt_at(gate, -1)
+    assert receipt["kind"] == "low_risk"
+    assert receipt["outcome"] == "EXECUTED"
+    assert receipt["at"] == 1_700_000_600
+
+
+def test_try_execute_high_risk_or_record_refusal_records_receipt_via_message_raw_datetime():
+    """try_execute_high_risk_or_record_refusal must record a durable REFUSED
+    receipt whose 'at' timestamp derives from gl.message_raw['datetime']."""
+    registry, gate, gl, web_q, prompt_q = _setup(ts=1_700_000_700)
+    # Registry starts PENDING_FIRST_CHECK (not safe) -- expect a durable refusal.
+    result = gate.try_execute_high_risk_or_record_refusal("0xdeadbeef23")
+    assert result == "REFUSED"
+    receipt = _receipt_at(gate, -1)
+    assert receipt["kind"] == "high_risk"
+    assert receipt["outcome"] == "REFUSED_NOT_SAFE"
+    assert receipt["at"] == 1_700_000_700
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(list(globals().items())):
