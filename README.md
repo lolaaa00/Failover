@@ -100,11 +100,11 @@ python3 scripts/contract_static_checks.py    # Depends-hash / stable-runtime / n
 
 ## Deployment status
 
-**No funded Studionet signer is available in this build environment.** `contracts/`,
-`scripts/deploy.ts`, and the frontend adapters are complete and ready to run against a
-live deployment, but no contract has actually been deployed, and no address or
-transaction hash in this repository should be read as live deployment evidence. See
-`docs/DEPLOYMENT.md` for exact steps and the evidence a real deployment must record.
+**Live on GenLayer Studionet (chain 61999).** `FailoverRegistry` and `FailoverGate`
+are both deployed and bound to the project `failover-demo`; the production frontend
+at https://failover-black.vercel.app is configured with the live addresses. See
+`docs/DEPLOYMENT.md` for the exact commit, source hashes, deployment transactions,
+live write evidence, and known limitations.
 
 ## Reviewer walkthrough
 
