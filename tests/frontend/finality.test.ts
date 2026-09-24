@@ -19,7 +19,11 @@ describe("waitForFinality", () => {
   });
 
   it("reports FINALIZED once the node confirms leader/validator finality", async () => {
-    waitForTransactionReceipt.mockResolvedValue({ statusName: "FINALIZED", txExecutionResultName: "FINISHED_WITH_RETURN" });
+    waitForTransactionReceipt.mockResolvedValue({
+      statusName: "FINALIZED",
+      txExecutionResultName: "FINISHED_WITH_RETURN",
+      consensus_data: { consensus_result: "MAJORITY_AGREE" },
+    });
 
     const result = await waitForFinality("0xabc");
 
@@ -41,6 +45,27 @@ describe("waitForFinality", () => {
     expect(waitForTransactionReceipt).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects FINALIZED when the validator result is NO_MAJORITY", async () => {
+    waitForTransactionReceipt.mockResolvedValue({
+      statusName: "FINALIZED",
+      consensus_data: { consensus_result: "NO_MAJORITY" },
+    });
+
+    const result = await waitForFinality("0xabc");
+
+    expect(result.status).toBe("CONSENSUS_FAILURE");
+    expect(result.error).toMatch(/successful consensus|NO_MAJORITY/i);
+  });
+
+  it("rejects FINALIZED receipts that omit the consensus decision", async () => {
+    waitForTransactionReceipt.mockResolvedValue({ statusName: "FINALIZED" });
+
+    const result = await waitForFinality("0xabc");
+
+    expect(result.status).toBe("CONSENSUS_FAILURE");
+    expect(result.error).toMatch(/successful consensus|unknown/i);
+  });
+
   it("reports CONSENSUS_FAILURE if the settled receipt never actually reached FINALIZED", async () => {
     waitForTransactionReceipt.mockResolvedValue({ statusName: "UNDETERMINED" });
 
@@ -54,7 +79,11 @@ describe("waitForFinality", () => {
     waitForTransactionReceipt
       .mockRejectedValueOnce(new Error("Transaction not found: 0xabc"))
       .mockRejectedValueOnce(new Error("Transaction not found: 0xabc"))
-      .mockResolvedValueOnce({ statusName: "FINALIZED", txExecutionResultName: "FINISHED_WITH_RETURN" });
+      .mockResolvedValueOnce({
+        statusName: "FINALIZED",
+        txExecutionResultName: "FINISHED_WITH_RETURN",
+        consensus_data: { consensus_result: "MAJORITY_AGREE" },
+      });
 
     const resultPromise = waitForFinality("0xabc");
     // Flush the two 1s propagation-retry backoffs without a real wall-clock wait.
@@ -154,6 +183,7 @@ describe("createFinalityStep", () => {
     waitForTransactionReceipt.mockResolvedValue({
       statusName: "FINALIZED",
       txExecutionResultName: "FINISHED_WITH_ERROR",
+      consensus_data: { consensus_result: "MAJORITY_AGREE" },
       consensus_data: { leader_receipt: [{ error: "only owner may activate" }] },
     });
 
