@@ -183,8 +183,10 @@ describe("createFinalityStep", () => {
     waitForTransactionReceipt.mockResolvedValue({
       statusName: "FINALIZED",
       txExecutionResultName: "FINISHED_WITH_ERROR",
-      consensus_data: { consensus_result: "MAJORITY_AGREE" },
-      consensus_data: { leader_receipt: [{ error: "only owner may activate" }] },
+      consensus_data: {
+        consensus_result: "MAJORITY_AGREE",
+        leader_receipt: [{ error: "only owner may activate" }],
+      },
     });
 
     const step = createFinalityStep();
