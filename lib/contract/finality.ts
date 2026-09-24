@@ -31,6 +31,33 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const SUCCESSFUL_CONSENSUS_RESULT = "MAJORITY_AGREE";
+
+/**
+ * GenLayer exposes the decided validator result in slightly different
+ * shapes across SDK/RPC versions. Read the canonical value without
+ * accepting FINALIZED by itself as a successful write.
+ */
+function readConsensusResult(receipt: GenLayerTransaction): string | undefined {
+  const raw = receipt as unknown as Record<string, unknown>;
+  const consensusData = raw.consensus_data;
+  const nested = consensusData && typeof consensusData === "object"
+    ? (consensusData as Record<string, unknown>)
+    : undefined;
+  const candidates = [
+    raw.consensusResultName,
+    raw.consensus_result,
+    raw.consensusResult,
+    nested?.consensus_result_name,
+    nested?.consensus_result,
+    nested?.consensusResult,
+    nested?.result_name,
+    nested?.result,
+  ];
+  const value = candidates.find((candidate): candidate is string => typeof candidate === "string");
+  return value?.trim().toUpperCase();
+}
+
 export interface FinalityOutcome {
   status: "FINALIZED" | "CONSENSUS_FAILURE";
   error?: string;
@@ -106,6 +133,15 @@ export async function waitForFinality(txHash: string): Promise<FinalityOutcome> 
     return {
       status: "CONSENSUS_FAILURE",
       error: `transaction settled without reaching FINALIZED (status: ${receipt.statusName ?? "unknown"})`,
+      receipt,
+    };
+  }
+
+  const consensusResult = readConsensusResult(receipt);
+  if (consensusResult !== SUCCESSFUL_CONSENSUS_RESULT) {
+    return {
+      status: "CONSENSUS_FAILURE",
+      error: `transaction finalized without successful consensus (result: ${consensusResult ?? "unknown"})`,
       receipt,
     };
   }
